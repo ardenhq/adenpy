@@ -1,0 +1,11 @@
+include README.md LICENSE
+include policies.yaml.example
+include ardenpy/py.typed
+recursive-include ardenpy *.py
+recursive-include examples *.py *.md
+global-exclude *.pyc
+global-exclude __pycache__
+global-exclude .DS_Store
+global-exclude *.pyo
+global-exclude .git*
+prune .git

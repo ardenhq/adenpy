@@ -1,0 +1,100 @@
+# AgentGate Policy Configuration Example
+# Upload this file using: agentgate policies upload --file policies.yaml
+
+policies:
+  # Safe operations - allow immediately
+  - name: "Read File Contents"
+    tool: "file.read"
+    action: "allow"
+    description: "Allow reading file contents without approval"
+    
+  - name: "Calculate Sum"
+    tool: "math.calculate_sum"
+    action: "allow"
+    description: "Allow mathematical calculations"
+    
+  - name: "Get User Info"
+    tool: "user.get_info"
+    action: "allow"
+    description: "Allow retrieving user information"
+    
+  - name: "Database Query"
+    tool: "database.select"
+    action: "allow"
+    description: "Allow read-only database queries"
+
+  # Sensitive operations - require approval
+  - name: "Write File"
+    tool: "file.write"
+    action: "require_approval"
+    description: "File write operations need human approval"
+    timeout: 300  # 5 minutes
+    
+  - name: "Delete File"
+    tool: "file.delete"
+    action: "require_approval"
+    description: "File deletions need human approval"
+    timeout: 600  # 10 minutes
+    
+  - name: "Send Email"
+    tool: "communication.send_email"
+    action: "require_approval"
+    description: "Email sending requires approval"
+    timeout: 300
+    
+  - name: "Update Database"
+    tool: "database.update"
+    action: "require_approval"
+    description: "Database modifications need approval"
+    timeout: 300
+
+  # Dangerous operations - block completely
+  - name: "Execute System Command"
+    tool: "system.execute_command"
+    action: "block"
+    description: "System command execution is blocked"
+    
+  - name: "Format Disk"
+    tool: "system.format_disk"
+    action: "block"
+    description: "Disk formatting is blocked"
+    
+  - name: "Delete Database"
+    tool: "database.drop_table"
+    action: "block"
+    description: "Database deletion is blocked"
+
+  # Custom tool-specific policies with natural language conditions
+  - name: "Financial Transactions"
+    tool: "finance.transfer_money"
+    action: "require_approval"
+    description: "Money transfers need approval based on amount"
+    timeout: 1800  # 30 minutes
+    policy: "Allow transfers under $1000 immediately, but require approval for any transfer over $1000"
+    
+  - name: "User Management"
+    tool: "admin.create_user"
+    action: "require_approval"
+    description: "User creation needs approval for privileged roles"
+    policy: "Allow creating regular users immediately, but require approval when creating admin or superuser accounts"
+    
+  - name: "File Operations"
+    tool: "file.delete"
+    action: "require_approval"
+    description: "File deletion with smart conditions"
+    policy: "Allow deleting temporary files (.tmp, .cache) immediately, but require approval for deleting any files in /important/ directory or files larger than 100MB"
+    
+  - name: "Database Operations"
+    tool: "database.update"
+    action: "require_approval"
+    description: "Database updates with business logic"
+    policy: "Allow updating user preferences and settings immediately, but require approval for any updates to financial records, user permissions, or tables with more than 1000 rows affected"
+
+# Global settings
+settings:
+  default_action: "require_approval"  # What to do for unmatched tools
+  max_approval_timeout: 3600  # 1 hour maximum
+  notification_channels:
+    - email: "admin@company.com"
+    - slack: "#agent-approvals"
+    - webhook: "https://company.com/webhooks/agent-approval"
