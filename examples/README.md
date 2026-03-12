@@ -20,6 +20,15 @@ Basic agent with common protected operations.
 ### 🛠️ **custom_agent.py**
 Custom AI assistant with interactive demo.
 
+### 🔄 **approval_workflows_demo.py** - NEW! Approval Workflows
+Demonstrates all three approval modes:
+- **Wait mode** (default): Blocks until approval/denial
+- **Async mode**: Non-blocking with callbacks  
+- **Webhook mode**: Real-time webhook notifications
+
+### 🌐 **production_webhook_server.py** - Production Webhooks
+Complete production-ready webhook server for scalable approval workflows. Shows how to implement non-blocking approvals in production systems.
+
 ### 🌟 **direct_openai_integration.py** - Direct OpenAI
 Shows direct OpenAI integration without frameworks. Use when building custom agents.
 

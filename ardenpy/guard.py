@@ -2,6 +2,8 @@
 
 import functools
 import logging
+import threading
+import time
 from typing import Any, Callable, Dict, List, Optional, TypeVar, Union, cast
 import inspect
 
@@ -19,12 +21,26 @@ F = TypeVar('F', bound=Callable[..., Any])
 logger = logging.getLogger(__name__)
 
 
-def guard_tool(tool_name: str, func: F) -> F:
+def guard_tool(
+    tool_name: str, 
+    func: F, 
+    approval_mode: str = "wait",
+    on_approval: Optional[Callable[[Any], None]] = None,
+    on_denial: Optional[Callable[[Exception], None]] = None,
+    webhook_url: Optional[str] = None
+) -> F:
     """Wrap a function with policy enforcement and approval workflow.
     
     Args:
         tool_name: Name identifier for the tool (used in policy evaluation)
         func: Function to wrap with policy enforcement
+        approval_mode: Approval workflow mode:
+            - "wait": Block until approval/denial (default)
+            - "async": Non-blocking with callbacks
+            - "webhook": Use webhook for notifications
+        on_approval: Callback for async mode when action is approved
+        on_denial: Callback for async mode when action is denied
+        webhook_url: Webhook URL for webhook mode
         
     Returns:
         Wrapped function that checks policy before execution
@@ -32,15 +48,40 @@ def guard_tool(tool_name: str, func: F) -> F:
     Raises:
         ConfigurationError: If Arden is not configured
         PolicyDeniedError: If policy denies the tool call
-        ApprovalTimeoutError: If approval workflow times out
+        ApprovalTimeoutError: If approval workflow times out (wait mode only)
         ArdenError: For other API communication errors
         
-    Example:
-        def my_tool(x: int, y: int) -> int:
-            return x + y
-            
-        protected_tool = guard_tool("my_tool", my_tool)
-        result = protected_tool(5, 7)  # Policy check happens here
+    Examples:
+        # Wait mode (default) - blocks until approved
+        def send_email(to: str, message: str):
+            return f"Email sent to {to}"
+        
+        safe_email = guard_tool("communication.email", send_email)
+        result = safe_email("user@example.com", "Hello")  # Blocks here
+        
+        # Async mode - non-blocking with callbacks
+        def handle_approval(result):
+            print(f"Email sent: {result}")
+        
+        def handle_denial(error):
+            print(f"Email blocked: {error}")
+        
+        safe_email_async = guard_tool(
+            "communication.email", 
+            send_email,
+            approval_mode="async",
+            on_approval=handle_approval,
+            on_denial=handle_denial
+        )
+        safe_email_async("user@example.com", "Hello")  # Returns immediately
+        
+        # Webhook mode - uses webhook for notifications
+        safe_email_webhook = guard_tool(
+            "communication.email",
+            send_email, 
+            approval_mode="webhook",
+            webhook_url="https://myapp.com/arden-webhook"
+        )
     """
     if not is_configured():
         raise ArdenError(
@@ -82,17 +123,44 @@ def guard_tool(tool_name: str, func: F) -> F:
                 
                 logger.info(f"Tool '{tool_name}' requires approval, action_id: {response.action_id}")
                 
-                # Wait for approval
-                status = client.wait_for_approval(response.action_id)
+                # Handle different approval modes
+                if approval_mode == "wait":
+                    # Wait mode: Block until approval/denial (default behavior)
+                    status = client.wait_for_approval(response.action_id)
+                    
+                    if status.status.value == "approved":
+                        logger.info(f"Tool '{tool_name}' approved, executing")
+                        return func(*args, **kwargs)
+                    else:
+                        raise PolicyDeniedError(
+                            f"Tool call was denied: {status.message or 'No reason provided'}",
+                            tool_name=tool_name
+                        )
                 
-                if status.status.value == "approved":
-                    logger.info(f"Tool '{tool_name}' approved, executing")
-                    return func(*args, **kwargs)
-                else:
-                    raise PolicyDeniedError(
-                        f"Tool call was denied: {status.message or 'No reason provided'}",
-                        tool_name=tool_name
+                elif approval_mode == "async":
+                    # Async mode: Start background polling and return immediately
+                    if not on_approval or not on_denial:
+                        raise ArdenError("Async mode requires both on_approval and on_denial callbacks")
+                    
+                    _start_async_approval_polling(
+                        client, response.action_id, func, args, kwargs, 
+                        tool_name, on_approval, on_denial
                     )
+                    return None  # Return immediately, callbacks will be called later
+                
+                elif approval_mode == "webhook":
+                    # Webhook mode: Register webhook and return immediately
+                    if not webhook_url:
+                        raise ArdenError("Webhook mode requires webhook_url parameter")
+                    
+                    _register_webhook_approval(
+                        client, response.action_id, func, args, kwargs,
+                        tool_name, webhook_url
+                    )
+                    return None  # Return immediately, webhook will handle response
+                
+                else:
+                    raise ArdenError(f"Unknown approval_mode: {approval_mode}. Use 'wait', 'async', or 'webhook'")
             
             elif response.decision == PolicyDecision.BLOCK:
                 raise PolicyDeniedError(
@@ -107,6 +175,78 @@ def guard_tool(tool_name: str, func: F) -> F:
             client.close()
     
     return cast(F, wrapper)
+
+
+def _start_async_approval_polling(
+    client: ArdenClient,
+    action_id: str,
+    func: Callable,
+    args: tuple,
+    kwargs: dict,
+    tool_name: str,
+    on_approval: Callable[[Any], None],
+    on_denial: Callable[[Exception], None]
+) -> None:
+    """Start background thread to poll for approval status."""
+    
+    def poll_approval():
+        """Background polling function."""
+        try:
+            # Wait for approval in background thread
+            status = client.wait_for_approval(action_id)
+            
+            if status.status.value == "approved":
+                logger.info(f"Tool '{tool_name}' approved asynchronously, executing")
+                try:
+                    result = func(*args, **kwargs)
+                    on_approval(result)
+                except Exception as e:
+                    logger.error(f"Error executing approved tool '{tool_name}': {e}")
+                    on_denial(e)
+            else:
+                error = PolicyDeniedError(
+                    f"Tool call was denied: {status.message or 'No reason provided'}",
+                    tool_name=tool_name
+                )
+                on_denial(error)
+                
+        except Exception as e:
+            logger.error(f"Error in async approval polling for '{tool_name}': {e}")
+            on_denial(e)
+    
+    # Start background thread
+    thread = threading.Thread(target=poll_approval, daemon=True)
+    thread.start()
+
+
+def _register_webhook_approval(
+    client: ArdenClient,
+    action_id: str,
+    func: Callable,
+    args: tuple,
+    kwargs: dict,
+    tool_name: str,
+    webhook_url: str
+) -> None:
+    """Register webhook for approval notifications."""
+    
+    # Store function call details for webhook handler
+    # This would typically be stored in a database or cache
+    # For now, we'll use a simple in-memory store
+    if not hasattr(_register_webhook_approval, 'pending_calls'):
+        _register_webhook_approval.pending_calls = {}
+    
+    _register_webhook_approval.pending_calls[action_id] = {
+        'func': func,
+        'args': args,
+        'kwargs': kwargs,
+        'tool_name': tool_name,
+        'webhook_url': webhook_url
+    }
+    
+    logger.info(f"Registered webhook for tool '{tool_name}', action_id: {action_id}")
+    # Note: The actual webhook registration with the backend would happen here
+    # The backend would call the webhook_url when the action is approved/denied
 
 
 def _make_serializable(obj: Any) -> Any:

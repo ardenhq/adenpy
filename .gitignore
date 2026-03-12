@@ -222,6 +222,12 @@ agent_files/
 crew_output/
 agent_workspace/
 test_files/
+webhook_logs/
+approval_cache/
+
+# Flask development files (for webhook examples)
+instance/
+.webassets-cache
 
 # Development and testing files
 local_dev_setup.py

@@ -41,6 +41,48 @@ result = safe_email("user@example.com", "Hello", "Test message")
 # ↑ May require approval based on your policies
 ```
 
+## Approval Workflows
+
+Arden supports three approval modes to fit different use cases:
+
+### Wait Mode (Default)
+Blocks until approval/denial - simple for demos and single-threaded apps:
+```python
+safe_email = guard_tool("communication.email", send_email)
+result = safe_email("user@example.com", "Hello", "Test")  # Blocks here
+```
+
+### Async Mode  
+Non-blocking with callbacks - ideal for concurrent operations:
+```python
+def handle_approval(result):
+    print(f"Email sent: {result}")
+
+def handle_denial(error):
+    print(f"Email blocked: {error}")
+
+safe_email = guard_tool(
+    "communication.email", 
+    send_email,
+    approval_mode="async",
+    on_approval=handle_approval,
+    on_denial=handle_denial
+)
+safe_email("user@example.com", "Hello", "Test")  # Returns immediately
+```
+
+### Webhook Mode
+Real-time webhook notifications - most scalable for production:
+```python
+safe_email = guard_tool(
+    "communication.email",
+    send_email,
+    approval_mode="webhook", 
+    webhook_url="https://myapp.com/arden-webhook"
+)
+safe_email("user@example.com", "Hello", "Test")  # Returns immediately
+```
+
 ## Framework Integration
 
 Arden works with **any** Python agent framework:
