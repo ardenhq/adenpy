@@ -233,6 +233,12 @@ instance/
 local_dev_setup.py
 mock_backend.py
 
+# Documentation files for development/backend implementation
+API_SPECIFICATION.md
+CONFIGURATION.md
+LOCAL_DEVELOPMENT.md
+PUBLISHING.md
+
 # Example/template files that shouldn't be committed as-is
 policies.yaml
 config.json

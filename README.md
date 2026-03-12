@@ -41,51 +41,56 @@ result = safe_email("user@example.com", "Hello", "Test message")
 # ↑ May require approval based on your policies
 ```
 
-## Approval Workflows
+## How Arden Works
 
-Arden supports three approval modes to fit different use cases:
+**Step 1: Protect your functions**
+```python
+def send_email(to: str, message: str):
+    return f"Email sent to {to}: {message}"
 
-### Wait Mode (Default)
-Blocks until approval/denial - simple for demos and single-threaded apps:
+# Wrap with Arden protection
+safe_email = guard_tool("communication.email", send_email)
+```
+
+**Step 2: Use in any framework**
+```python
+# Works the same in any framework:
+result = safe_email("user@example.com", "Hello")  # May require approval
+```
+
+**Step 3: Choose approval behavior**
+You can choose how approvals work (all examples work with any framework):
+
+### Default: Wait for Approval
 ```python
 safe_email = guard_tool("communication.email", send_email)
-result = safe_email("user@example.com", "Hello", "Test")  # Blocks here
+result = safe_email("user@example.com", "Hello")  # Pauses until approved
 ```
 
-### Async Mode  
-Non-blocking with callbacks - ideal for concurrent operations:
+### Advanced: Async Callbacks  
 ```python
-def handle_approval(result):
-    print(f"Email sent: {result}")
-
-def handle_denial(error):
-    print(f"Email blocked: {error}")
-
 safe_email = guard_tool(
-    "communication.email", 
-    send_email,
+    "communication.email", send_email,
     approval_mode="async",
-    on_approval=handle_approval,
-    on_denial=handle_denial
+    on_approval=lambda result: print(f"Sent: {result}"),
+    on_denial=lambda error: print(f"Blocked: {error}")
 )
-safe_email("user@example.com", "Hello", "Test")  # Returns immediately
+safe_email("user@example.com", "Hello")  # Returns immediately, callbacks later
 ```
 
-### Webhook Mode
-Real-time webhook notifications - most scalable for production:
+### Production: Webhooks
 ```python
 safe_email = guard_tool(
-    "communication.email",
-    send_email,
+    "communication.email", send_email,
     approval_mode="webhook", 
-    webhook_url="https://myapp.com/arden-webhook"
+    webhook_url="https://myapp.com/webhook"
 )
-safe_email("user@example.com", "Hello", "Test")  # Returns immediately
+safe_email("user@example.com", "Hello")  # Returns immediately, webhook handles result
 ```
 
 ## Framework Integration
 
-Arden works with **any** Python agent framework:
+The same protected functions work with any agent framework:
 
 ### LangChain
 ```python

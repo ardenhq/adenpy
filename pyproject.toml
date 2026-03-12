@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ardenpy"
-version = "0.1.4"
+version = "0.1.6"
 description = "AI Agent Warden - Keep your AI agents in check with policy enforcement and human oversight"
 readme = "README.md"
 license = {text = "MIT"}
