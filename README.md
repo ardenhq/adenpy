@@ -142,6 +142,7 @@ python publish.py
 - **Website**: [https://arden.sh](https://arden.sh)
 - **Dashboard**: [https://arden.sh/dashboard](https://arden.sh/dashboard)  
 - **Documentation**: [https://arden.sh/docs](https://arden.sh/docs)
+- **Support**: [team@arden.dev](mailto:team@arden.dev)
 - **PyPI Package**: [https://pypi.org/project/ardenpy/](https://pypi.org/project/ardenpy/)
 
 ## License
