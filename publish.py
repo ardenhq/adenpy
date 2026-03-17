@@ -11,6 +11,7 @@ import subprocess
 import shutil
 import re
 from pathlib import Path
+from version_manager import VersionManager
 
 def run_command(cmd, check=True):
     """Run a command and return the result."""
@@ -75,26 +76,102 @@ def suggest_next_version(current_version):
     except:
         return ["0.1.2", "0.2.0", "1.0.0"]
 
-def get_version_input():
-    """Get version number from user input."""
-    current_version = get_current_version()
+def get_version_input(target_repo: str = None):
+    """Get version number from user input with smart suggestions."""
+    vm = VersionManager()
+    
+    # Show comprehensive status
+    vm.print_status_report()
+    
+    # Get analysis for validation
+    analysis = vm.analyze_version_state()
+    
+    current_version = analysis["local_version"]
     if not current_version:
         return None
     
-    print(f"\n📋 Current version: {current_version}")
+    # Show current status and let user choose a version
+    if target_repo:
+        can_upload_current, reason = vm.validate_upload(target_repo)
+        if not can_upload_current:
+            print(f"\n⚠️ Current version {current_version} cannot be uploaded to {target_repo}: {reason}")
+            print("Please select a different version below:")
+        else:
+            print(f"\n✅ Current version {current_version} can be uploaded to {target_repo}")
     
-    suggestions = suggest_next_version(current_version)
-    print("💡 Suggested versions:")
+    # Get appropriate suggestions based on target
+    suggestions_data = vm.suggest_next_versions()
+    if target_repo and target_repo.lower() == "pypi":
+        suggestions = suggestions_data["for_pypi"][:3]
+        print(f"\n💡 Suggested versions for PyPI:")
+    elif target_repo and target_repo.lower() == "testpypi":
+        suggestions = suggestions_data["for_testpypi"][:3]
+        print(f"\n🧪 Suggested versions for TestPyPI:")
+    else:
+        suggestions = suggest_next_version(current_version)
+        print(f"\n💡 Suggested versions:")
+    
     for i, version in enumerate(suggestions, 1):
         labels = ["(patch)", "(minor)", "(major)"]
-        print(f"   {i}. {version} {labels[i-1]}")
+        print(f"   {i}. {version} {labels[i-1] if i <= 3 else ''}")
+    
+    # Add option to keep current version if it's valid
+    if target_repo:
+        can_upload_current, _ = vm.validate_upload(target_repo)
+        if can_upload_current:
+            print(f"   c. {current_version} (keep current)")
+    else:
+        print(f"   c. {current_version} (keep current)")
     
     while True:
-        choice = input(f"\nEnter new version (1-3 for suggestions, or type version): ").strip()
+        choice_prompt = f"\nEnter new version (1-{len(suggestions)} for suggestions"
+        if target_repo:
+            can_upload_current, _ = vm.validate_upload(target_repo)
+            if can_upload_current:
+                choice_prompt += ", 'c' for current"
+        choice_prompt += ", or type version): "
         
-        if choice in ["1", "2", "3"]:
-            return suggestions[int(choice) - 1]
-        elif re.match(r'^\d+\.\d+\.\d+$', choice):
+        choice = input(choice_prompt).strip()
+        
+        if choice.isdigit() and 1 <= int(choice) <= len(suggestions):
+            selected_version = suggestions[int(choice) - 1]
+            
+            # Validate the selected version
+            if target_repo:
+                # Temporarily update version to validate
+                original_version = current_version
+                update_version(selected_version)
+                can_upload, reason = vm.validate_upload(target_repo)
+                update_version(original_version)  # Restore original
+                
+                if not can_upload:
+                    print(f"❌ Version {selected_version} cannot be uploaded to {target_repo}: {reason}")
+                    continue
+            
+            return selected_version
+        elif choice.lower() == 'c':
+            # Use current version if valid
+            if target_repo:
+                can_upload_current, reason = vm.validate_upload(target_repo)
+                if can_upload_current:
+                    return current_version
+                else:
+                    print(f"❌ Current version {current_version} cannot be uploaded to {target_repo}: {reason}")
+                    continue
+            else:
+                return current_version
+        elif re.match(r'^\d+\.\d+\.\d+', choice):
+            # Validate custom version
+            if target_repo:
+                original_version = current_version
+                update_version(choice)
+                can_upload, reason = vm.validate_upload(target_repo)
+                update_version(original_version)  # Restore original
+                
+                if not can_upload:
+                    print(f"❌ Version {choice} cannot be uploaded to {target_repo}: {reason}")
+                    continue
+            
             return choice
         elif choice.lower() == 'skip':
             return current_version
@@ -205,8 +282,15 @@ def main():
     
     # Handle version input for build operations
     if choice in ["1", "2", "3"]:
-        # Get new version from user
-        new_version = get_version_input()
+        # Determine target repository for version validation
+        target_repo = None
+        if choice == "2":
+            target_repo = "testpypi"
+        elif choice == "3":
+            target_repo = "pypi"
+        
+        # Get new version from user with repository-specific validation
+        new_version = get_version_input(target_repo)
         if not new_version:
             print("❌ Version input failed")
             return
@@ -221,16 +305,42 @@ def main():
         check_package()
     
     if choice == "2":
-        upload_to_testpypi()
+        # Final validation before upload
+        vm = VersionManager()
+        can_upload, reason = vm.validate_upload("testpypi")
+        if can_upload:
+            upload_to_testpypi()
+        else:
+            print(f"❌ Upload blocked: {reason}")
     elif choice == "3":
+        # Final validation before upload
+        vm = VersionManager()
+        can_upload, reason = vm.validate_upload("pypi")
+        if not can_upload:
+            print(f"❌ Upload blocked: {reason}")
+            return
+            
         confirm = input("\n⚠️  Upload to PyPI? This will make the package public. (y/n): ")
         if confirm.lower() == 'y':
             upload_to_pypi()
         else:
             print("Cancelled")
     elif choice == "4":
-        upload_to_testpypi()
+        # Validate existing build for TestPyPI
+        vm = VersionManager()
+        can_upload, reason = vm.validate_upload("testpypi")
+        if can_upload:
+            upload_to_testpypi()
+        else:
+            print(f"❌ Upload blocked: {reason}")
     elif choice == "5":
+        # Validate existing build for PyPI
+        vm = VersionManager()
+        can_upload, reason = vm.validate_upload("pypi")
+        if not can_upload:
+            print(f"❌ Upload blocked: {reason}")
+            return
+            
         confirm = input("\n⚠️  Upload to PyPI? This will make the package public. (y/n): ")
         if confirm.lower() == 'y':
             upload_to_pypi()
