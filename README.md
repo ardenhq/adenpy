@@ -208,8 +208,8 @@ python publish.py
 ## Links
 
 - **Website**: [https://arden.sh](https://arden.sh)
-- **Dashboard**: [https://arden.sh/dashboard](https://arden.sh/dashboard)  
-- **Documentation**: [https://arden.sh/docs](https://arden.sh/docs)
+- **Dashboard**: [https://app.arden.sh/dashboard](https://arden.sh/dashboard)  
+- **Documentation**: [https://app.arden.sh/docs](https://arden.sh/docs)
 - **Support**: [team@arden.sh](mailto:team@arden.sh)
 - **PyPI Package**: [https://pypi.org/project/ardenpy/](https://pypi.org/project/ardenpy/)
 

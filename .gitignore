@@ -278,3 +278,4 @@ debug_auth.py
 debug_policy_response.py
 test_e2e_workflow.py
 quick_e2e_test.py
+context_passing_example.py
