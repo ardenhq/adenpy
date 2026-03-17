@@ -89,7 +89,7 @@ def configure(
         api_url = os.getenv('ARDEN_API_URL')
         if api_url is None:
             if environment == 'test':
-                api_url = 'https://test-api.arden.sh'
+                api_url = 'https://api-test.arden.sh'
             else:
                 api_url = 'https://api.arden.sh'
     

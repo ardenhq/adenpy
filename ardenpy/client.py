@@ -55,7 +55,7 @@ class ArdenClient:
         
         # Add API key to headers
         headers = {
-            "Authorization": f"Bearer {self.config.api_key}",
+            "X-API-Key": self.config.api_key,
             "Content-Type": "application/json",
             "User-Agent": "Arden-SDK/0.1.0"
         }
@@ -117,7 +117,7 @@ class ArdenClient:
         try:
             response_data = self._make_request(
                 method="POST",
-                endpoint="/check",
+                endpoint="/policy/check",
                 data=request_data.dict(),
             )
             return ToolCallResponse(**response_data)

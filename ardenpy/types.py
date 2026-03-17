@@ -32,6 +32,9 @@ class ToolCallResponse(BaseModel):
     decision: PolicyDecision = Field(..., description="Policy decision")
     action_id: Optional[str] = Field(default=None, description="Action ID for approval workflow")
     message: Optional[str] = Field(default=None, description="Optional message")
+    status: Optional[str] = Field(default=None, description="Request status")
+    environment: Optional[str] = Field(default=None, description="Environment (test/live)")
+    user_id: Optional[str] = Field(default=None, description="User identifier")
 
 
 class ActionStatusResponse(BaseModel):

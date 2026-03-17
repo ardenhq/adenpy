@@ -270,3 +270,10 @@ Pipfile.lock
 .cache/
 .npm/
 .yarn/
+
+# Development files
+local_dev_setup.py
+mock_backend.py
+debug_auth.py
+debug_policy_response.py
+test_e2e_workflow.py
