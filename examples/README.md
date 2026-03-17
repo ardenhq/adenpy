@@ -87,22 +87,6 @@ configure(api_key="test_12345_your_api_key_here")
 configure(api_key="live_67890_your_api_key", environment="live")
 ```
 
-## When to Use Each Example
-
-### **Learning Path**
-1. **`getting_started.py`** - Learn Arden basics (5 minutes)
-2. **`simple_agent.py`** - See basic agent patterns (10 minutes)
-3. **Choose your integration approach:**
-
-### **Framework Integration** (Most Users)
-- **`langchain_integration.py`** - If you use/want LangChain
-- **`crewai_integration.py`** - If you use/want multi-agent crews
-- **`autogpt_integration.py`** - If you want autonomous agents
-
-### **Custom Development**
-- **`custom_agent.py`** - Build interactive assistants
-- **`direct_openai_integration.py`** - Direct OpenAI without frameworks
-
 ## Framework Integration Pattern
 
 All frameworks use the same Arden pattern:

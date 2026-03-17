@@ -51,13 +51,14 @@ class ArdenProtectedTools:
     def __init__(self):
         print("🛡️ Setting up Arden-protected tools for LangChain...")
         
-        # Create protected versions of all tools
-        self.web_search = guard_tool("web.search", self._web_search)
-        self.file_create = guard_tool("file.create", self._create_file)
-        self.file_read = guard_tool("file.read", self._read_file)
-        self.calculate = guard_tool("math.calculate", self._calculate)
-        self.send_email = guard_tool("communication.email", self._send_email)
-        self.get_weather = guard_tool("api.weather", self._get_weather)
+        # Create protected versions with realistic risk-based tool names
+        self.web_search = guard_tool("research.web", self._web_search)           # LOW RISK - Allow
+        self.file_read = guard_tool("file.read", self._read_file)                # LOW RISK - Allow
+        self.calculate = guard_tool("math.calculate", self._calculate)           # LOW RISK - Allow
+        self.get_weather = guard_tool("api.weather", self._get_weather)          # LOW RISK - Allow
+        
+        self.file_create = guard_tool("file.write", self._create_file)           # MEDIUM RISK - Approval
+        self.send_email = guard_tool("communication.email", self._send_email)    # MEDIUM RISK - Approval
         
         print("✅ All tools protected by Arden policies")
     

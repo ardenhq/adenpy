@@ -15,6 +15,8 @@ pip install ardenpy
 ### 1. Get API Key
 Visit [https://arden.sh](https://arden.sh) to get your free test API key.
 
+Your test API key will start with `test_` and automatically connect to the test environment at `https://api-test.arden.sh`.
+
 ### 2. Protect Your Functions
 
 ```python
@@ -23,42 +25,65 @@ from ardenpy import guard_tool, configure
 # Configure once
 configure(api_key="test_12345_your_api_key_here")
 
-# Protect any function
+# Protect different types of functions
+def read_file(filename: str):
+    # Low-risk operation - typically ALLOWED
+    return f"Reading {filename}"
+
 def send_email(to: str, subject: str, message: str):
-    # Your email logic here
-    return f"Email sent to {to}"
+    # Medium-risk operation - typically REQUIRES APPROVAL
+    return f"Email sent to {to}: {subject}"
 
-def delete_files(pattern: str):
-    # Your file deletion logic here
-    return f"Deleted files matching {pattern}"
+def delete_database(table: str):
+    # High-risk operation - typically BLOCKED
+    return f"Deleted table {table}"
 
-# Apply protection
-safe_email = guard_tool("communication.email", send_email)
-safe_delete = guard_tool("file.delete", delete_files)
+# Apply protection with descriptive tool names
+safe_read = guard_tool("file.read", read_file)
+safe_email = guard_tool("communication.email", send_email)  
+safe_delete = guard_tool("database.delete", delete_database)
 
-# Use normally - Arden handles security
-result = safe_email("user@example.com", "Hello", "Test message")
-# ↑ May require approval based on your policies
+# Use normally - Arden enforces your policies
+result1 = safe_read("report.txt")        # ✅ Executes immediately (allowed)
+result2 = safe_email("user@co.com", "Hi", "Hello")  # ⏳ Waits for approval
+result3 = safe_delete("users")           # ❌ Throws error (blocked)
 ```
 
 ## How Arden Works
 
-**Step 1: Protect your functions**
+**Step 1: Protect your functions with descriptive names**
 ```python
+def read_config(filename: str):
+    return f"Config from {filename}"
+
 def send_email(to: str, message: str):
     return f"Email sent to {to}: {message}"
 
-# Wrap with Arden protection
-safe_email = guard_tool("communication.email", send_email)
+def delete_files(pattern: str):
+    return f"Deleted files matching {pattern}"
+
+# Use descriptive tool names that match your policies
+safe_read = guard_tool("config.read", read_config)      # Low risk
+safe_email = guard_tool("communication.email", send_email)  # Medium risk  
+safe_delete = guard_tool("file.delete", delete_files)   # High risk
 ```
 
 **Step 2: Use in any framework**
 ```python
-# Works the same in any framework:
-result = safe_email("user@example.com", "Hello")  # May require approval
+# Policy enforcement happens automatically:
+config = safe_read("app.json")           # ✅ Allowed - executes immediately
+safe_email("user@co.com", "Hello")      # ⏳ Requires approval - waits for human
+safe_delete("*.tmp")                    # ❌ Blocked - throws PolicyError
 ```
 
-**Step 3: Choose approval behavior**
+**Step 3: Configure policies by risk level**
+Set policies at [https://arden.sh/dashboard](https://arden.sh/dashboard) based on risk:
+
+**Low Risk (Allow)**: `config.read`, `data.read`, `file.read`
+**Medium Risk (Requires Approval)**: `communication.*`, `api.post`, `file.write`  
+**High Risk (Block)**: `file.delete`, `database.drop`, `system.exec`
+
+**Step 4: Choose approval workflow**
 You can choose how approvals work (all examples work with any framework):
 
 ### Default: Wait for Approval
@@ -69,23 +94,25 @@ result = safe_email("user@example.com", "Hello")  # Pauses until approved
 
 ### Advanced: Async Callbacks  
 ```python
-safe_email = guard_tool(
-    "communication.email", send_email,
+# For sensitive operations that need approval but shouldn't block
+safe_deploy = guard_tool(
+    "deployment.production", deploy_to_prod,
     approval_mode="async",
-    on_approval=lambda result: print(f"Sent: {result}"),
-    on_denial=lambda error: print(f"Blocked: {error}")
+    on_approval=lambda result: notify_team(f"Deployment successful: {result}"),
+    on_denial=lambda error: alert_team(f"Deployment blocked: {error}")
 )
-safe_email("user@example.com", "Hello")  # Returns immediately, callbacks later
+safe_deploy("v2.1.0")  # Returns immediately, callbacks handle result
 ```
 
 ### Production: Webhooks
 ```python
-safe_email = guard_tool(
-    "communication.email", send_email,
+# For high-volume operations with external approval systems
+safe_payment = guard_tool(
+    "payment.process", process_payment,
     approval_mode="webhook", 
-    webhook_url="https://myapp.com/webhook"
+    webhook_url="https://approval-system.company.com/webhook"
 )
-safe_email("user@example.com", "Hello")  # Returns immediately, webhook handles result
+safe_payment(amount=1000, customer="cust_123")  # Webhook notifies approval system
 ```
 
 ## Framework Integration
@@ -97,8 +124,26 @@ The same protected functions work with any agent framework:
 from langchain.tools import Tool
 from ardenpy import guard_tool
 
-safe_search = guard_tool("web.search", search_function)
-tools = [Tool(name="search", func=safe_search, description="Search web")]
+# Protect different risk levels
+def web_search(query: str):
+    return f"Search results for: {query}"
+
+def send_slack_message(channel: str, message: str):
+    return f"Posted to #{channel}: {message}"
+
+def execute_sql(query: str):
+    return f"Executed: {query}"
+
+# Apply appropriate protection levels
+safe_search = guard_tool("web.search", web_search)           # Low risk - allow
+safe_slack = guard_tool("communication.slack", send_slack_message)  # Medium risk - approval
+safe_sql = guard_tool("database.execute", execute_sql)      # High risk - block
+
+tools = [
+    Tool(name="search", func=safe_search, description="Search the web"),
+    Tool(name="slack", func=safe_slack, description="Send Slack messages"),
+    Tool(name="sql", func=safe_sql, description="Execute SQL queries")
+]
 ```
 
 ### CrewAI
@@ -106,17 +151,40 @@ tools = [Tool(name="search", func=safe_search, description="Search web")]
 from crewai import Tool
 from ardenpy import guard_tool
 
-@tool("protected_file_ops")
-def file_operations(action: str, filename: str):
-    return guard_tool("file.delete", delete_file)(filename)
+# Realistic agent tools with different risk profiles
+@tool("research_tool")
+def research_web(topic: str):
+    protected_search = guard_tool("research.web", lambda q: f"Research on {q}")
+    return protected_search(topic)  # Allowed - research is low risk
+
+@tool("communication_tool") 
+def send_email(recipient: str, content: str):
+    protected_email = guard_tool("communication.email", lambda r, c: f"Email to {r}")
+    return protected_email(recipient, content)  # Requires approval - external communication
+
+@tool("system_tool")
+def deploy_code(environment: str):
+    protected_deploy = guard_tool("deployment.production", lambda e: f"Deploy to {e}")
+    return protected_deploy(environment)  # Blocked or requires approval - high risk
 ```
 
 ### Custom Agents
 ```python
-class MyAgent:
+class SecurityAwareAgent:
     def __init__(self):
-        self.search = guard_tool("web.search", self._search)
-        self.email = guard_tool("communication.email", self._email)
+        # Different protection levels for different capabilities
+        self.read_data = guard_tool("data.read", self._read_data)           # Allow
+        self.send_email = guard_tool("communication.email", self._send_email)  # Approval
+        self.delete_files = guard_tool("file.delete", self._delete_files)   # Block
+        
+    def _read_data(self, source: str):
+        return f"Reading data from {source}"
+        
+    def _send_email(self, to: str, message: str):
+        return f"Email sent to {to}: {message}"
+        
+    def _delete_files(self, pattern: str):
+        return f"Deleted files matching {pattern}"
 ```
 
 ## Examples
