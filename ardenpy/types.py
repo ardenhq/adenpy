@@ -1,5 +1,6 @@
 """Type definitions for Arden SDK."""
 
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field
@@ -73,3 +74,45 @@ class ApprovalTimeoutError(ArdenError):
 class ConfigurationError(ArdenError):
     """Raised when SDK is not properly configured."""
     pass
+
+
+@dataclass
+class WebhookEvent:
+    """Parsed payload delivered to on_approval / on_denial callbacks.
+
+    All the information needed to re-execute the original tool call is here.
+    The user's callback receives this object and decides what to do with it.
+
+    Example::
+
+        def on_approval(event: WebhookEvent):
+            result = issue_refund(
+                event.context["amount"],
+                event.context["customer_id"],
+            )
+            print(f"Refund issued: {result}")
+    """
+
+    event_type: str          # "action_approved" or "action_denied"
+    action_id: str
+    tool_name: str           # e.g. "stripe.issue_refund"
+    context: Dict[str, Any]  # all kwargs/context that were originally submitted
+    approved_by: Optional[str] = None
+    notes: Optional[str] = None
+    raw: Dict[str, Any] = field(default_factory=dict)  # full original payload
+
+
+@dataclass
+class PendingApproval:
+    """Returned by guard_tool when a call is queued for human approval.
+
+    In webhook and async modes the original call returns immediately with
+    this object instead of the function's real return value.  Use the
+    ``action_id`` for logging or correlation.
+    """
+
+    action_id: str
+    tool_name: str
+
+    def __repr__(self) -> str:
+        return f"PendingApproval(action_id={self.action_id!r}, tool_name={self.tool_name!r})"

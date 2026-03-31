@@ -1,8 +1,8 @@
 # Arden Python SDK
 
-**AI Agent Warden - Keep Your AI Agents in Check**
+**Policy enforcement and human approval workflows for AI agent tool calls.**
 
-Arden is the warden for your AI agents. Enforce policies, require human approval for sensitive actions, and maintain control over what your agents can actually do - no matter which framework you use.
+Arden sits between your AI agent and its tools. Every call is checked against your policies — automatically allowed, blocked, or held for a human to approve before execution continues.
 
 ## Installation
 
@@ -12,207 +12,365 @@ pip install ardenpy
 
 ## Quick Start
 
-### 1. Get API Key
-Visit [https://arden.sh](https://arden.sh) to get your free test API key.
+### 1. Get your API key
 
-Your test API key will start with `test_` and automatically connect to the test environment at `https://api-test.arden.sh`.
+Visit [https://arden.sh](https://arden.sh) and create an agent. You'll get two keys:
+- `arden_test_...` — for development, hits `https://api-test.arden.sh`
+- `arden_live_...` — for production, hits `https://api.arden.sh`
 
-### 2. Protect Your Functions
+### 2. Configure once
 
 ```python
-from ardenpy import guard_tool, configure
+import ardenpy as arden
 
-# Configure once
-configure(api_key="test_12345_your_api_key_here")
-
-# Protect different types of functions
-def read_file(filename: str):
-    # Low-risk operation - typically ALLOWED
-    return f"Reading {filename}"
-
-def send_email(to: str, subject: str, message: str):
-    # Medium-risk operation - typically REQUIRES APPROVAL
-    return f"Email sent to {to}: {subject}"
-
-def delete_database(table: str):
-    # High-risk operation - typically BLOCKED
-    return f"Deleted table {table}"
-
-# Apply protection with descriptive tool names
-safe_read = guard_tool("file.read", read_file)
-safe_email = guard_tool("communication.email", send_email)  
-safe_delete = guard_tool("database.delete", delete_database)
-
-# Use normally - Arden enforces your policies
-result1 = safe_read("report.txt")        # ✅ Executes immediately (allowed)
-result2 = safe_email("user@co.com", "Hi", "Hello")  # ⏳ Waits for approval
-result3 = safe_delete("users")           # ❌ Throws error (blocked)
+arden.configure(api_key="arden_live_your_key_here")
 ```
 
-## How Arden Works
+### 3. Wrap your tools
 
-**Step 1: Protect your functions with descriptive names**
 ```python
-def read_config(filename: str):
-    return f"Config from {filename}"
+def issue_refund(amount: float, customer_id: str) -> dict:
+    # your real implementation
+    return {"refund_id": "re_123", "amount": amount}
 
-def send_email(to: str, message: str):
-    return f"Email sent to {to}: {message}"
+safe_refund = arden.guard_tool("stripe.issue_refund", issue_refund)
 
-def delete_files(pattern: str):
-    return f"Deleted files matching {pattern}"
-
-# Use descriptive tool names that match your policies
-safe_read = guard_tool("config.read", read_config)      # Low risk
-safe_email = guard_tool("communication.email", send_email)  # Medium risk  
-safe_delete = guard_tool("file.delete", delete_files)   # High risk
+# Now call it normally — Arden enforces your policy
+result = safe_refund(150.0, customer_id="cus_abc")
 ```
 
-**Step 2: Use in any framework**
+Depending on the policy you set for `stripe.issue_refund` in the dashboard, Arden will:
+- **Allow** — execute immediately and return the result
+- **Require approval** — pause until a human approves or denies it on the dashboard
+- **Block** — raise `PolicyDeniedError` immediately
+
+---
+
+## Approval Modes
+
+When a tool call requires human approval, you choose how your code handles the wait.
+
+### Mode 1: `wait` (default)
+
+Blocks the current thread until a human acts on the dashboard. The function either returns its result or raises `PolicyDeniedError`.
+
 ```python
-# Policy enforcement happens automatically:
-config = safe_read("app.json")           # ✅ Allowed - executes immediately
-safe_email("user@co.com", "Hello")      # ⏳ Requires approval - waits for human
-safe_delete("*.tmp")                    # ❌ Blocked - throws PolicyError
+safe_refund = arden.guard_tool("stripe.issue_refund", issue_refund)
+
+try:
+    result = safe_refund(150.0, customer_id="cus_abc")
+    # execution resumes here only after a human approves
+    print(f"Refund issued: {result}")
+except arden.PolicyDeniedError as e:
+    print(f"Refund denied: {e}")
+except arden.ApprovalTimeoutError as e:
+    print(f"No response within timeout: {e}")
 ```
 
-**Step 3: Configure policies by risk level**
-Set policies at [https://arden.sh/dashboard](https://arden.sh/dashboard) based on risk:
+**When to use:** Simple scripts, CLI tools, synchronous request handlers where blocking is acceptable.
 
-**Low Risk (Allow)**: `config.read`, `data.read`, `file.read`
-**Medium Risk (Requires Approval)**: `communication.*`, `api.post`, `file.write`  
-**High Risk (Block)**: `file.delete`, `database.drop`, `system.exec`
+---
 
-**Step 4: Choose approval workflow**
-You can choose how approvals work (all examples work with any framework):
+### Mode 2: `async`
 
-### Default: Wait for Approval
+Returns a `PendingApproval` object immediately. A background thread polls for the decision and calls your callback when it arrives.
+
 ```python
-safe_email = guard_tool("communication.email", send_email)
-result = safe_email("user@example.com", "Hello")  # Pauses until approved
-```
+def on_approval(event: arden.WebhookEvent):
+    # called from background thread when admin approves
+    result = issue_refund(event.context["amount"], event.context["customer_id"])
+    print(f"Refund issued: {result}")
 
-### Advanced: Async Callbacks  
-```python
-# For sensitive operations that need approval but shouldn't block
-safe_deploy = guard_tool(
-    "deployment.production", deploy_to_prod,
+def on_denial(event: arden.WebhookEvent):
+    print(f"Refund denied: {event.notes}")
+
+safe_refund = arden.guard_tool(
+    "stripe.issue_refund",
+    issue_refund,
     approval_mode="async",
-    on_approval=lambda result: notify_team(f"Deployment successful: {result}"),
-    on_denial=lambda error: alert_team(f"Deployment blocked: {error}")
+    on_approval=on_approval,
+    on_denial=on_denial,
 )
-safe_deploy("v2.1.0")  # Returns immediately, callbacks handle result
+
+pending = safe_refund(150.0, customer_id="cus_abc")
+# returns PendingApproval(action_id="...", tool_name="stripe.issue_refund")
+# your program continues; callbacks fire when the admin decides
+print(f"Waiting for approval: {pending.action_id}")
 ```
 
-### Production: Webhooks
+**When to use:** Long-running processes (agents, workers) where you can't block the main loop.
+
+> **Note:** `on_approval` and `on_denial` both receive a `WebhookEvent` (see [WebhookEvent reference](#webhookevent-reference)). The function is not re-executed automatically — you call it yourself inside the callback using `event.context`.
+
+---
+
+### Mode 3: `webhook`
+
+Returns a `PendingApproval` object immediately. When the admin acts on the dashboard, Arden POSTs to your webhook endpoint. You call `arden.handle_webhook()` from your web server to dispatch to your callbacks.
+
+This mode has **no background polling** — your server receives a push notification instead.
+
+#### Step 1 — Configure your webhook in the Arden dashboard
+
+Go to your agent's settings → Webhooks → add your endpoint URL (e.g. `https://yourapp.com/arden/webhook`) and note the **signing key**.
+
+#### Step 2 — Configure the signing key in your app
+
 ```python
-# For high-volume operations with external approval systems
-safe_payment = guard_tool(
-    "payment.process", process_payment,
-    approval_mode="webhook", 
-    webhook_url="https://approval-system.company.com/webhook"
+arden.configure(
+    api_key="arden_live_your_key_here",
+    signing_key="your_signing_key_from_dashboard",
 )
-safe_payment(amount=1000, customer="cust_123")  # Webhook notifies approval system
 ```
+
+#### Step 3 — Wrap your tool
+
+```python
+def on_approval(event: arden.WebhookEvent):
+    # The dashboard approved this call — re-execute with the approved args
+    result = issue_refund(
+        event.context["amount"],
+        event.context["customer_id"],
+    )
+    # do whatever comes next: update DB, notify user, etc.
+    print(f"Refund issued after approval: {result}")
+
+def on_denial(event: arden.WebhookEvent):
+    print(f"Refund denied by {event.approved_by}: {event.notes}")
+
+safe_refund = arden.guard_tool(
+    "stripe.issue_refund",
+    issue_refund,
+    approval_mode="webhook",
+    on_approval=on_approval,
+    on_denial=on_denial,
+)
+
+pending = safe_refund(150.0, customer_id="cus_abc")
+# returns PendingApproval immediately — no blocking, no polling
+```
+
+#### Step 4 — Handle incoming webhooks in your web framework
+
+**FastAPI:**
+```python
+from fastapi import Request
+import ardenpy as arden
+
+@app.post("/arden/webhook")
+async def arden_webhook(request: Request):
+    arden.handle_webhook(
+        body=await request.body(),
+        headers=dict(request.headers),
+    )
+    return {"ok": True}
+```
+
+**Flask:**
+```python
+from flask import request
+import ardenpy as arden
+
+@app.post("/arden/webhook")
+def arden_webhook():
+    arden.handle_webhook(
+        body=request.get_data(),
+        headers=dict(request.headers),
+    )
+    return {"ok": True}
+```
+
+**Django:**
+```python
+from django.views import View
+from django.http import JsonResponse
+import ardenpy as arden
+
+class ArdenWebhookView(View):
+    def post(self, request):
+        arden.handle_webhook(
+            body=request.body,
+            headers=dict(request.headers),
+        )
+        return JsonResponse({"ok": True})
+```
+
+`handle_webhook` verifies the `X-Arden-Signature` header, looks up the registered callbacks for the `action_id` in the payload, and calls `on_approval` or `on_denial`. It raises `ValueError` if the signature doesn't match.
+
+#### Signature verification in your own middleware
+
+If your framework already has webhook verification middleware, or you want to verify before doing anything else, use `verify_webhook_signature` directly instead of relying on `handle_webhook` to do it:
+
+```python
+from ardenpy import verify_webhook_signature
+
+# e.g. in a FastAPI dependency or Django middleware
+timestamp = request.headers.get("X-Arden-Timestamp", "")
+signature = request.headers.get("X-Arden-Signature", "")
+
+if not verify_webhook_signature(request.body, timestamp, signature, SIGNING_KEY):
+    raise HTTPException(status_code=401, detail="Invalid webhook signature")
+
+# verified — now parse and act on the payload yourself, or call handle_webhook
+# with signing_key=None to skip the second verification
+arden.handle_webhook(body=request.body, headers={}, signing_key=None)
+```
+
+`verify_webhook_signature` returns `True`/`False` and requires no global configuration — you pass the key directly.
+
+**When to use:** Production services where you want push-based delivery instead of polling, or when your process may restart between the tool call and the approval.
+
+---
+
+## `WebhookEvent` Reference
+
+Both `on_approval` and `on_denial` receive a `WebhookEvent` with these fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `event_type` | `str` | `"action_approved"` or `"action_denied"` |
+| `action_id` | `str` | Unique ID for this approval request |
+| `tool_name` | `str` | Tool name as passed to `guard_tool`, e.g. `"stripe.issue_refund"` |
+| `context` | `dict` | All args submitted with the original call, keyed by parameter name |
+| `approved_by` | `str \| None` | Admin user ID who acted on the dashboard |
+| `notes` | `str \| None` | Admin notes from the dashboard |
+| `raw` | `dict` | Full webhook payload for anything not covered above |
+
+```python
+def on_approval(event: arden.WebhookEvent):
+    print(event.tool_name)          # "stripe.issue_refund"
+    print(event.context["amount"])  # 150.0
+    print(event.context["customer_id"])  # "cus_abc"
+    print(event.approved_by)        # "user_admin123"
+    print(event.notes)              # "Verified with customer"
+```
+
+---
+
+## Policy Decision Reference
+
+| Decision | What happens |
+|----------|-------------|
+| `allow` | Function executes immediately, returns its result |
+| `requires_approval` | Depends on `approval_mode` — see above |
+| `block` | `PolicyDeniedError` raised immediately, function never executes |
+
+---
+
+## Exceptions
+
+```python
+from ardenpy import PolicyDeniedError, ApprovalTimeoutError, ArdenError
+
+try:
+    result = safe_refund(150.0, customer_id="cus_abc")
+except PolicyDeniedError as e:
+    # Policy blocked this call, or a human denied it (wait mode)
+    print(f"Blocked: {e}")
+except ApprovalTimeoutError as e:
+    # Nobody approved within max_poll_time (wait mode only)
+    print(f"Timed out after {e.timeout}s, action_id={e.action_id}")
+except ArdenError as e:
+    # API communication error, misconfiguration, etc.
+    print(f"Arden error: {e}")
+```
+
+---
+
+## Configuration Reference
+
+```python
+arden.configure(
+    api_key="arden_live_...",       # required
+    signing_key="...",              # required for webhook mode signature verification
+    environment="live",             # "live" or "test" (auto-detected from api_key prefix)
+    api_url="https://api.arden.sh", # override API base URL
+    timeout=30.0,                   # HTTP request timeout in seconds
+    poll_interval=2.0,              # seconds between status polls (wait/async modes)
+    max_poll_time=300.0,            # max seconds to wait before ApprovalTimeoutError
+    retry_attempts=3,               # retries on transient API errors
+)
+```
+
+Environment-specific helpers:
+```python
+arden.configure_test(api_key="arden_test_...")   # sets environment="test" automatically
+arden.configure_live(api_key="arden_live_...")   # sets environment="live" automatically
+```
+
+---
 
 ## Framework Integration
 
-The same protected functions work with any agent framework:
+`guard_tool` wraps a plain Python function, so it works with any agent framework.
 
 ### LangChain
+
 ```python
 from langchain.tools import Tool
-from ardenpy import guard_tool
+import ardenpy as arden
 
-# Protect different risk levels
-def web_search(query: str):
-    return f"Search results for: {query}"
+arden.configure(api_key="arden_live_...")
 
-def send_slack_message(channel: str, message: str):
-    return f"Posted to #{channel}: {message}"
+def send_email(to: str, subject: str, body: str) -> str:
+    # real implementation
+    return f"Email sent to {to}"
 
-def execute_sql(query: str):
-    return f"Executed: {query}"
-
-# Apply appropriate protection levels
-safe_search = guard_tool("web.search", web_search)           # Low risk - allow
-safe_slack = guard_tool("communication.slack", send_slack_message)  # Medium risk - approval
-safe_sql = guard_tool("database.execute", execute_sql)      # High risk - block
+safe_email = arden.guard_tool("communication.email", send_email)
 
 tools = [
-    Tool(name="search", func=safe_search, description="Search the web"),
-    Tool(name="slack", func=safe_slack, description="Send Slack messages"),
-    Tool(name="sql", func=safe_sql, description="Execute SQL queries")
+    Tool(name="send_email", func=safe_email, description="Send an email"),
 ]
 ```
 
 ### CrewAI
+
 ```python
-from crewai import Tool
-from ardenpy import guard_tool
+from crewai import tool
+import ardenpy as arden
 
-# Realistic agent tools with different risk profiles
-@tool("research_tool")
-def research_web(topic: str):
-    protected_search = guard_tool("research.web", lambda q: f"Research on {q}")
-    return protected_search(topic)  # Allowed - research is low risk
+arden.configure(api_key="arden_live_...")
 
-@tool("communication_tool") 
-def send_email(recipient: str, content: str):
-    protected_email = guard_tool("communication.email", lambda r, c: f"Email to {r}")
-    return protected_email(recipient, content)  # Requires approval - external communication
+def process_refund(amount: float, customer_id: str) -> str:
+    return f"Refund of ${amount} issued to {customer_id}"
 
-@tool("system_tool")
-def deploy_code(environment: str):
-    protected_deploy = guard_tool("deployment.production", lambda e: f"Deploy to {e}")
-    return protected_deploy(environment)  # Blocked or requires approval - high risk
+safe_refund = arden.guard_tool("stripe.issue_refund", process_refund)
+
+@tool("process_refund")
+def refund_tool(amount: float, customer_id: str) -> str:
+    """Issue a refund to a customer."""
+    return safe_refund(amount, customer_id=customer_id)
 ```
 
-### Custom Agents
+### Direct OpenAI tool calls
+
 ```python
-class SecurityAwareAgent:
-    def __init__(self):
-        # Different protection levels for different capabilities
-        self.read_data = guard_tool("data.read", self._read_data)           # Allow
-        self.send_email = guard_tool("communication.email", self._send_email)  # Approval
-        self.delete_files = guard_tool("file.delete", self._delete_files)   # Block
-        
-    def _read_data(self, source: str):
-        return f"Reading data from {source}"
-        
-    def _send_email(self, to: str, message: str):
-        return f"Email sent to {to}: {message}"
-        
-    def _delete_files(self, pattern: str):
-        return f"Deleted files matching {pattern}"
+from openai import OpenAI
+import ardenpy as arden
+import json
+
+arden.configure(api_key="arden_live_...")
+
+def issue_refund(amount: float, customer_id: str) -> dict:
+    return {"refund_id": "re_123", "amount": amount}
+
+safe_refund = arden.guard_tool("stripe.issue_refund", issue_refund)
+
+# In your tool dispatch loop:
+def handle_tool_call(name: str, arguments: dict):
+    if name == "issue_refund":
+        return safe_refund(**arguments)
 ```
 
-## Examples
-
-See the `examples/` directory for complete working examples:
-
-- **getting_started.py** - Simple 3-step introduction
-- **langchain_integration.py** - LangChain + Arden
-- **crewai_integration.py** - CrewAI + Arden  
-- **autogpt_integration.py** - AutoGPT + Arden
-- **direct_openai_integration.py** - Direct OpenAI (no frameworks)
-
-## Publishing
-
-Use the included publishing script:
-
-```bash
-python publish.py
-```
+---
 
 ## Links
 
+- **Dashboard**: [https://app.arden.sh](https://app.arden.sh)
 - **Website**: [https://arden.sh](https://arden.sh)
-- **Dashboard**: [https://app.arden.sh/dashboard](https://arden.sh/dashboard)  
-- **Documentation**: [https://app.arden.sh/docs](https://arden.sh/docs)
+- **PyPI**: [https://pypi.org/project/ardenpy/](https://pypi.org/project/ardenpy/)
 - **Support**: [team@arden.sh](mailto:team@arden.sh)
-- **PyPI Package**: [https://pypi.org/project/ardenpy/](https://pypi.org/project/ardenpy/)
 
 ## License
 
-MIT License - see LICENSE file for details.
+MIT License — see LICENSE file for details.

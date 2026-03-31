@@ -14,6 +14,7 @@ class ArdenConfig(BaseModel):
     poll_interval: float = Field(default=2.0, description="Polling interval for approvals")
     max_poll_time: float = Field(default=300.0, description="Maximum time to wait for approval")
     retry_attempts: int = Field(default=3, description="Number of retry attempts for API calls")
+    signing_key: Optional[str] = Field(default=None, description="Webhook signing key for verifying incoming webhook payloads")
     
     @validator('api_url')
     def validate_api_url(cls, v):
@@ -56,6 +57,7 @@ def configure(
     poll_interval: Optional[float] = None,
     max_poll_time: Optional[float] = None,
     retry_attempts: Optional[int] = None,
+    signing_key: Optional[str] = None,
 ) -> ArdenConfig:
     """Configure Arden SDK.
     
@@ -114,7 +116,9 @@ def configure(
         config_dict['max_poll_time'] = max_poll_time
     if retry_attempts is not None:
         config_dict['retry_attempts'] = retry_attempts
-    
+    if signing_key is not None:
+        config_dict['signing_key'] = signing_key
+
     _config = ArdenConfig(**config_dict)
     return _config
 

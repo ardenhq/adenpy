@@ -1,11 +1,14 @@
 """Main guard functionality for wrapping and protecting tool calls."""
 
 import functools
+import hashlib
+import hmac
+import inspect
+import json
 import logging
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, TypeVar, Union, cast
-import inspect
 
 from .client import ArdenClient
 from .config import get_config, is_configured
@@ -13,6 +16,8 @@ from .types import (
     PolicyDecision,
     PolicyDeniedError,
     ApprovalTimeoutError,
+    PendingApproval,
+    WebhookEvent,
     ArdenError,
 )
 
@@ -22,12 +27,12 @@ logger = logging.getLogger(__name__)
 
 
 def guard_tool(
-    tool_name: str, 
-    func: F, 
+    tool_name: str,
+    func: F,
     approval_mode: str = "wait",
-    on_approval: Optional[Callable[[Any], None]] = None,
-    on_denial: Optional[Callable[[Exception], None]] = None,
-    webhook_url: Optional[str] = None
+    on_approval: Optional[Callable] = None,
+    on_denial: Optional[Callable] = None,
+    webhook_url: Optional[str] = None,
 ) -> F:
     """Wrap a function with policy enforcement and approval workflow.
     
@@ -75,13 +80,28 @@ def guard_tool(
         )
         safe_email_async("user@example.com", "Hello")  # Returns immediately
         
-        # Webhook mode - uses webhook for notifications
+        # Webhook mode — returns PendingApproval immediately; on_approval/on_denial
+        # are called when the Arden backend POSTs to your webhook endpoint.
+        # The WebhookEvent passed to on_approval contains tool_name + context
+        # (all submitted args) so you can re-execute the call yourself.
+        def on_approval(event: WebhookEvent):
+            result = send_email(event.context["to"], event.context["message"])
+            print(f"Email sent after approval: {result}")
+
+        def on_denial(event: WebhookEvent):
+            print(f"Email blocked: {event.notes}")
+
         safe_email_webhook = guard_tool(
             "communication.email",
-            send_email, 
+            send_email,
             approval_mode="webhook",
-            webhook_url="https://myapp.com/arden-webhook"
+            on_approval=on_approval,
+            on_denial=on_denial,
         )
+        pending = safe_email_webhook("user@example.com", "Hello")
+        # pending is a PendingApproval(action_id=..., tool_name=...)
+        # When the admin approves on the dashboard, your webhook endpoint
+        # receives a POST and you call arden.handle_webhook(body, headers).
     """
     if not is_configured():
         raise ArdenError(
@@ -145,23 +165,24 @@ def guard_tool(
                     # Async mode: Start background polling and return immediately
                     if not on_approval or not on_denial:
                         raise ArdenError("Async mode requires both on_approval and on_denial callbacks")
-                    
+
                     _start_async_approval_polling(
-                        client, response.action_id, func, args, kwargs, 
+                        client, response.action_id, func, args, kwargs,
                         tool_name, on_approval, on_denial
                     )
-                    return None  # Return immediately, callbacks will be called later
-                
+                    return PendingApproval(action_id=response.action_id, tool_name=tool_name)
+
                 elif approval_mode == "webhook":
-                    # Webhook mode: Register webhook and return immediately
-                    if not webhook_url:
-                        raise ArdenError("Webhook mode requires webhook_url parameter")
-                    
-                    _register_webhook_approval(
-                        client, response.action_id, func, args, kwargs,
-                        tool_name, webhook_url
-                    )
-                    return None  # Return immediately, webhook will handle response
+                    # Webhook mode: register callbacks; return PendingApproval immediately.
+                    # When the admin approves/denies on the dashboard, the Arden backend
+                    # POSTs to your webhook URL.  Call arden.handle_webhook(body, headers)
+                    # from your web framework — it will invoke on_approval(event) or
+                    # on_denial(event) with a WebhookEvent containing all the context.
+                    if not on_approval or not on_denial:
+                        raise ArdenError("Webhook mode requires both on_approval and on_denial callbacks")
+
+                    _register_webhook_callbacks(response.action_id, tool_name, on_approval, on_denial)
+                    return PendingApproval(action_id=response.action_id, tool_name=tool_name)
                 
                 else:
                     raise ArdenError(f"Unknown approval_mode: {approval_mode}. Use 'wait', 'async', or 'webhook'")
@@ -223,34 +244,188 @@ def _start_async_approval_polling(
     thread.start()
 
 
-def _register_webhook_approval(
-    client: ArdenClient,
+# Module-level registry mapping action_id → {on_approval, on_denial, tool_name}
+# Keyed by action_id; entries are removed once the callback fires.
+_webhook_callbacks: Dict[str, Dict[str, Any]] = {}
+
+
+def _register_webhook_callbacks(
     action_id: str,
-    func: Callable,
-    args: tuple,
-    kwargs: dict,
     tool_name: str,
-    webhook_url: str
+    on_approval: Callable,
+    on_denial: Callable,
 ) -> None:
-    """Register webhook for approval notifications."""
-    
-    # Store function call details for webhook handler
-    # This would typically be stored in a database or cache
-    # For now, we'll use a simple in-memory store
-    if not hasattr(_register_webhook_approval, 'pending_calls'):
-        _register_webhook_approval.pending_calls = {}
-    
-    _register_webhook_approval.pending_calls[action_id] = {
-        'func': func,
-        'args': args,
-        'kwargs': kwargs,
+    """Store callbacks to be invoked when handle_webhook() is called."""
+    _webhook_callbacks[action_id] = {
         'tool_name': tool_name,
-        'webhook_url': webhook_url
+        'on_approval': on_approval,
+        'on_denial': on_denial,
     }
-    
-    logger.info(f"Registered webhook for tool '{tool_name}', action_id: {action_id}")
-    # Note: The actual webhook registration with the backend would happen here
-    # The backend would call the webhook_url when the action is approved/denied
+    logger.info(f"Registered webhook callbacks for '{tool_name}', action_id: {action_id}")
+
+
+def verify_webhook_signature(
+    body: bytes,
+    timestamp: str,
+    signature: str,
+    signing_key: str,
+) -> bool:
+    """Verify an Arden webhook signature.
+
+    Exposed as a standalone function for users who want to integrate signature
+    verification into their own middleware rather than using
+    :func:`handle_webhook`.
+
+    Arden signs each webhook as::
+
+        HMAC-SHA256(signing_key, f"{timestamp}.{raw_body}")
+
+    and sends the result in the ``X-Arden-Signature: sha256=<hex>`` header
+    alongside ``X-Arden-Timestamp``.
+
+    Args:
+        body: Raw request body bytes (before any parsing).
+        timestamp: Value of the ``X-Arden-Timestamp`` header.
+        signature: Value of the ``X-Arden-Signature`` header (e.g. ``sha256=abc123``).
+        signing_key: Signing key from the Arden dashboard for this agent.
+
+    Returns:
+        ``True`` if the signature is valid.  Always use this return value with
+        ``if not verify_webhook_signature(...): raise ...`` rather than
+        catching exceptions — the comparison is timing-safe.
+
+    Example::
+
+        # In your own middleware
+        from ardenpy import verify_webhook_signature
+
+        timestamp = request.headers["X-Arden-Timestamp"]
+        signature = request.headers["X-Arden-Signature"]
+
+        if not verify_webhook_signature(request.body, timestamp, signature, SIGNING_KEY):
+            return HttpResponse(status=401)
+    """
+    sig_payload = f"{timestamp}.{body.decode('utf-8')}"
+    expected = 'sha256=' + hmac.new(
+        signing_key.encode('utf-8'),
+        sig_payload.encode('utf-8'),
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+def handle_webhook(
+    body: bytes,
+    headers: Dict[str, str],
+    signing_key: Optional[str] = None,
+) -> None:
+    """Process an incoming webhook POST from the Arden backend.
+
+    Call this from whatever web framework you use (Flask, FastAPI, Django …)
+    when Arden POSTs to your webhook URL.  It verifies the signature, parses
+    the event, and dispatches to the ``on_approval`` or ``on_denial`` callback
+    that was registered via ``guard_tool(..., approval_mode="webhook")``.
+
+    Signature verification uses :func:`verify_webhook_signature` internally.
+    If you need to verify the signature yourself (e.g. in middleware) before
+    calling this function, pass ``signing_key=None`` and leave it unconfigured
+    to skip the second verification here.
+
+    Args:
+        body: Raw request body bytes.
+        headers: Request headers dict (case-insensitive lookup is handled internally).
+        signing_key: HMAC-SHA256 signing key from the Arden dashboard.  If omitted
+            the value from ``configure(signing_key=...)`` is used.  Pass ``None``
+            *and* leave it unconfigured to skip verification entirely (only for
+            local testing).
+
+    Raises:
+        ValueError: If signature headers are present but the signature does not match.
+        ArdenError: If the payload cannot be parsed or the action_id is unknown.
+
+    Example (FastAPI)::
+
+        @app.post("/arden/webhook")
+        async def arden_webhook(request: Request):
+            arden.handle_webhook(
+                body=await request.body(),
+                headers=dict(request.headers),
+            )
+            return {"ok": True}
+    """
+    # Normalise header keys to lowercase for case-insensitive lookup
+    normalised = {k.lower(): v for k, v in headers.items()}
+
+    # --- Signature verification ---
+    key = signing_key
+    if key is None:
+        try:
+            key = get_config().signing_key
+        except Exception:
+            key = None
+
+    if key:
+        timestamp = normalised.get('x-arden-timestamp', '')
+        signature = normalised.get('x-arden-signature', '')
+        if not timestamp or not signature:
+            raise ValueError("Missing X-Arden-Timestamp or X-Arden-Signature headers")
+
+        if not verify_webhook_signature(body, timestamp, signature, key):
+            raise ValueError("Webhook signature verification failed")
+    else:
+        logger.warning("No signing_key configured — skipping webhook signature verification")
+
+    # --- Parse payload ---
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise ArdenError(f"Invalid webhook payload: {exc}") from exc
+
+    event_type = payload.get('event_type')   # "action_approved" or "action_denied"
+    action_data = payload.get('action', {})
+    approval_data = payload.get('approval', {})
+    action_id = action_data.get('action_id')
+
+    if not action_id:
+        raise ArdenError("Webhook payload missing action.action_id")
+
+    # --- Build WebhookEvent ---
+    event = WebhookEvent(
+        event_type=event_type or '',
+        action_id=action_id,
+        tool_name=action_data.get('tool_name', ''),
+        context=action_data.get('context', {}),
+        approved_by=approval_data.get('admin_user_id'),
+        notes=approval_data.get('notes'),
+        raw=payload,
+    )
+
+    # --- Dispatch ---
+    entry = _webhook_callbacks.pop(action_id, None)
+    if entry is None:
+        # Could be a replay or a call whose guard_tool wrapper is in a different
+        # process.  Log and return rather than raising so the backend gets 200.
+        logger.warning(
+            f"handle_webhook: no registered callback for action_id={action_id!r}. "
+            "This is expected if the process restarted between the tool call and "
+            "the webhook delivery."
+        )
+        return
+
+    if event_type == 'action_approved':
+        logger.info(f"Action {action_id} approved — calling on_approval")
+        try:
+            entry['on_approval'](event)
+        except Exception as exc:
+            logger.error(f"on_approval callback raised: {exc}")
+            raise
+    else:
+        logger.info(f"Action {action_id} denied — calling on_denial")
+        try:
+            entry['on_denial'](event)
+        except Exception as exc:
+            logger.error(f"on_denial callback raised: {exc}")
+            raise
 
 
 def _make_serializable(obj: Any) -> Any:
