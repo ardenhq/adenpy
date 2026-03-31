@@ -100,9 +100,13 @@ def guard_tool(
             bound_args = sig.bind(*args, **kwargs)
             bound_args.apply_defaults()
             
-            # Convert arguments to serializable format
+            # Convert arguments to serializable format.
+            # Use bound_args.arguments (all named bindings) rather than
+            # bound_args.kwargs (keyword-only) so positional args like
+            # issue_refund(50.0) are sent as {"amount": 50.0} and can be
+            # evaluated by policy rules.
             serializable_args = _make_serializable(list(args))
-            serializable_kwargs = _make_serializable(dict(bound_args.kwargs))
+            serializable_kwargs = _make_serializable(dict(bound_args.arguments))
             
             # Check policy
             logger.debug(f"Checking policy for tool '{tool_name}'")
