@@ -1,0 +1,6 @@
+# ArdenPy Dependencies
+# Core HTTP client for API communication
+httpx>=0.24.0
+
+# Data validation and parsing
+pydantic>=2.0.0
