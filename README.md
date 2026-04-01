@@ -114,16 +114,7 @@ This mode has **no background polling** — your server receives a push notifica
 
 Go to your agent's settings → Webhooks → add your endpoint URL (e.g. `https://yourapp.com/arden/webhook`) and note the **signing key**.
 
-#### Step 2 — Configure the signing key in your app
-
-```python
-arden.configure(
-    api_key="arden_live_your_key_here",
-    signing_key="your_signing_key_from_dashboard",
-)
-```
-
-#### Step 3 — Wrap your tool
+#### Step 2 — Wrap your tool
 
 ```python
 def on_approval(event: arden.WebhookEvent):
@@ -152,45 +143,59 @@ pending = safe_refund(150.0, customer_id="cus_abc")
 
 #### Step 4 — Handle incoming webhooks in your web framework
 
+Pass the signing key (shown in the Arden dashboard when you create the webhook) directly to `handle_webhook`. Keep it in an environment variable — don't hardcode it.
+
 **FastAPI:**
 ```python
+import os
 from fastapi import Request
 import ardenpy as arden
+
+SIGNING_KEY = os.environ["ARDEN_SIGNING_KEY"]
 
 @app.post("/arden/webhook")
 async def arden_webhook(request: Request):
     arden.handle_webhook(
         body=await request.body(),
         headers=dict(request.headers),
+        signing_key=SIGNING_KEY,
     )
     return {"ok": True}
 ```
 
 **Flask:**
 ```python
+import os
 from flask import request
 import ardenpy as arden
+
+SIGNING_KEY = os.environ["ARDEN_SIGNING_KEY"]
 
 @app.post("/arden/webhook")
 def arden_webhook():
     arden.handle_webhook(
         body=request.get_data(),
         headers=dict(request.headers),
+        signing_key=SIGNING_KEY,
     )
     return {"ok": True}
 ```
 
 **Django:**
 ```python
+import os
 from django.views import View
 from django.http import JsonResponse
 import ardenpy as arden
+
+SIGNING_KEY = os.environ["ARDEN_SIGNING_KEY"]
 
 class ArdenWebhookView(View):
     def post(self, request):
         arden.handle_webhook(
             body=request.body,
             headers=dict(request.headers),
+            signing_key=SIGNING_KEY,
         )
         return JsonResponse({"ok": True})
 ```
@@ -202,7 +207,10 @@ class ArdenWebhookView(View):
 If your framework already has webhook verification middleware, or you want to verify before doing anything else, use `verify_webhook_signature` directly instead of relying on `handle_webhook` to do it:
 
 ```python
+import os
 from ardenpy import verify_webhook_signature
+
+SIGNING_KEY = os.environ["ARDEN_SIGNING_KEY"]
 
 # e.g. in a FastAPI dependency or Django middleware
 timestamp = request.headers.get("X-Arden-Timestamp", "")
@@ -211,12 +219,11 @@ signature = request.headers.get("X-Arden-Signature", "")
 if not verify_webhook_signature(request.body, timestamp, signature, SIGNING_KEY):
     raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
-# verified — now parse and act on the payload yourself, or call handle_webhook
-# with signing_key=None to skip the second verification
+# verified — now dispatch (pass signing_key=None to skip the second check)
 arden.handle_webhook(body=request.body, headers={}, signing_key=None)
 ```
 
-`verify_webhook_signature` returns `True`/`False` and requires no global configuration — you pass the key directly.
+`verify_webhook_signature` returns `True`/`False` and takes the key directly — no `configure()` call needed.
 
 **When to use:** Production services where you want push-based delivery instead of polling, or when your process may restart between the tool call and the approval.
 
@@ -282,7 +289,6 @@ except ArdenError as e:
 ```python
 arden.configure(
     api_key="arden_live_...",       # required
-    signing_key="...",              # required for webhook mode signature verification
     environment="live",             # "live" or "test" (auto-detected from api_key prefix)
     api_url="https://api.arden.sh", # override API base URL
     timeout=30.0,                   # HTTP request timeout in seconds
@@ -291,6 +297,8 @@ arden.configure(
     retry_attempts=3,               # retries on transient API errors
 )
 ```
+
+The webhook signing key is **not** part of `configure()`. Pass it directly to `handle_webhook(signing_key=...)` or `verify_webhook_signature(...)` — it's a per-endpoint secret, not global SDK configuration.
 
 Environment-specific helpers:
 ```python
