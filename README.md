@@ -375,6 +375,7 @@ def handle_tool_call(name: str, arguments: dict):
 ## Links
 
 - **Dashboard**: [https://app.arden.sh](https://app.arden.sh)
+- **Documentation**: [https://arden.sh/docs](https://arden.sh/docs)
 - **Website**: [https://arden.sh](https://arden.sh)
 - **PyPI**: [https://pypi.org/project/ardenpy/](https://pypi.org/project/ardenpy/)
 - **Support**: [team@arden.sh](mailto:team@arden.sh)
