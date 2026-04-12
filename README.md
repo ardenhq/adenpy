@@ -76,13 +76,12 @@ except arden.ApprovalTimeoutError as e:
 Returns a `PendingApproval` object immediately. A background thread polls for the decision and calls your callback when it arrives.
 
 ```python
-def on_approval(event: arden.WebhookEvent):
-    # called from background thread when admin approves
-    result = issue_refund(event.context["amount"], event.context["customer_id"])
+def on_approval(result):
+    # called from background thread after the function executes automatically
     print(f"Refund issued: {result}")
 
-def on_denial(event: arden.WebhookEvent):
-    print(f"Refund denied: {event.notes}")
+def on_denial(error: arden.PolicyDeniedError):
+    print(f"Refund denied: {error}")
 
 safe_refund = arden.guard_tool(
     "stripe.issue_refund",
@@ -100,7 +99,7 @@ print(f"Waiting for approval: {pending.action_id}")
 
 **When to use:** Long-running processes (agents, workers) where you can't block the main loop.
 
-> **Note:** `on_approval` and `on_denial` both receive a `WebhookEvent` (see [WebhookEvent reference](#webhookevent-reference)). The function is not re-executed automatically — you call it yourself inside the callback using `event.context`.
+> **Note:** In `async` mode, `on_approval` receives the **return value** of your function (which is re-executed automatically after approval), and `on_denial` receives a `PolicyDeniedError`. This differs from `webhook` mode, where both callbacks receive a `WebhookEvent` and you re-execute the function yourself.
 
 ---
 
