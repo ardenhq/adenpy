@@ -167,7 +167,7 @@ def guard_tool(
                         raise ArdenError("Async mode requires both on_approval and on_denial callbacks")
 
                     _start_async_approval_polling(
-                        client, response.action_id, func, args, kwargs,
+                        response.action_id, func, args, kwargs,
                         tool_name, on_approval, on_denial
                     )
                     return PendingApproval(action_id=response.action_id, tool_name=tool_name)
@@ -203,7 +203,6 @@ def guard_tool(
 
 
 def _start_async_approval_polling(
-    client: ArdenClient,
     action_id: str,
     func: Callable,
     args: tuple,
@@ -213,9 +212,10 @@ def _start_async_approval_polling(
     on_denial: Callable[[Exception], None]
 ) -> None:
     """Start background thread to poll for approval status."""
-    
+
     def poll_approval():
         """Background polling function."""
+        client = ArdenClient()
         try:
             # Wait for approval in background thread
             status = client.wait_for_approval(action_id)
@@ -234,11 +234,13 @@ def _start_async_approval_polling(
                     tool_name=tool_name
                 )
                 on_denial(error)
-                
+
         except Exception as e:
             logger.error(f"Error in async approval polling for '{tool_name}': {e}")
             on_denial(e)
-    
+        finally:
+            client.close()
+
     # Start background thread
     thread = threading.Thread(target=poll_approval, daemon=True)
     thread.start()
