@@ -231,7 +231,6 @@ instance/
 
 # Development and testing files
 local_dev_setup.py
-mock_backend.py
 
 # Documentation files for development/backend implementation
 API_SPECIFICATION.md
@@ -273,11 +272,10 @@ Pipfile.lock
 
 # Development files
 local_dev_setup.py
-mock_backend.py
 debug_auth.py
 debug_policy_response.py
 test_e2e_workflow.py
 quick_e2e_test.py
 context_passing_example.py
 
-LIBRARY_REFERENCE.md
+CLAUDE.md
