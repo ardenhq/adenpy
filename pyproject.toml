@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ardenpy"
-version = "0.2.0"
+version = "0.4.0"
 description = "AI Agent Warden - Keep your AI agents in check with policy enforcement and human oversight"
 readme = "README.md"
 license = {text = "MIT"}
@@ -34,6 +34,12 @@ dependencies = [
     "packaging>=21.0",
     "requests>=2.25.0",
 ]
+
+[project.optional-dependencies]
+langchain = ["langchain>=0.1.0"]
+crewai = ["crewai>=0.28.0"]
+openai-agents = ["openai-agents>=0.0.3"]
+all = ["langchain>=0.1.0", "crewai>=0.28.0", "openai-agents>=0.0.3"]
 
 [project.urls]
 Homepage = "https://arden.sh"

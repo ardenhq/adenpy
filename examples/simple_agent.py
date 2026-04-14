@@ -1,10 +1,15 @@
-"""Simple example of using Arden to protect AI agent tool calls."""
+"""Simple example of using Arden to protect AI agent tool calls.
 
+Setup:
+    export ARDEN_API_KEY="arden_live_..."
+    python simple_agent.py
+"""
+
+import os
 import time
 from ardenpy import guard_tool, configure
 
-# Configure the SDK with your test API key from https://arden.sh
-configure(api_key="test_12345_your_test_api_key_here")
+configure(api_key=os.environ["ARDEN_API_KEY"])
 
 # Example tools that an AI agent might use
 def read_file(filename: str) -> str:

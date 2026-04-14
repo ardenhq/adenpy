@@ -18,8 +18,9 @@ from .types import (
     ApprovalTimeoutError,
     ConfigurationError,
 )
+from . import integrations
 
-__version__ = "0.1.0"
+__version__ = "0.4.0"
 __author__ = "Arden Team"
 __email__ = "team@arden.dev"
 
@@ -43,6 +44,9 @@ __all__ = [
 
     # Configuration
     "ArdenConfig",
+
+    # Framework integrations (import from ardenpy.integrations.*)
+    "integrations",
 
     # Types and enums
     "ActionStatus",

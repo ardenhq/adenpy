@@ -138,7 +138,10 @@ def guard_tool(
             
             # Handle policy decision
             if response.decision == PolicyDecision.ALLOW:
-                logger.debug(f"Policy allows tool '{tool_name}'")
+                if response.reason == 'no_policy_configured':
+                    logger.debug(f"Tool '{tool_name}' allowed: no policy configured (action_id: {response.action_id})")
+                else:
+                    logger.debug(f"Policy allows tool '{tool_name}'")
                 return func(*args, **kwargs)
             
             elif response.decision == PolicyDecision.REQUIRE_APPROVAL:

@@ -1,22 +1,18 @@
 """
-Getting Started with Arden - Super Simple Example
+Getting Started with Arden
 
-This is the easiest way to get started with Arden.
-Just run this file and see how it protects your functions!
+The simplest possible Arden integration. Wraps three plain functions and
+shows allow / approval / block in action.
 
-Steps to run:
-1. Get your free test API key from https://arden.sh
-2. Replace "test_12345_your_test_api_key_here" with your actual key
-3. Run: python examples/getting_started.py
-
-That's it! 🚀
+Setup:
+    export ARDEN_API_KEY="arden_live_..."   # or arden_test_...
+    python getting_started.py
 """
 
+import os
 from ardenpy import guard_tool, configure
 
-# Step 1: Configure Arden with your API key
-# The SDK automatically detects test environment from 'test_' prefix
-configure(api_key="test_12345_your_test_api_key_here")
+configure(api_key=os.environ["ARDEN_API_KEY"])
 
 # Step 2: Define functions with different risk levels
 def read_config(filename: str):

@@ -1,113 +1,118 @@
 # Arden Examples
 
-Clean, working examples demonstrating Arden integration with AI agents.
+## Which example should I use?
 
-## Quick Start
+| Situation | Example |
+|-----------|---------|
+| First time using Arden | `getting_started.py` |
+| Custom agent, no framework | `custom_agent.py` |
+| OpenAI Chat Completions loop | `direct_openai_integration.py` |
+| Autonomous / AutoGPT-style agent | `autogpt_integration.py` |
+| LangChain agent | `langchain_integration.py` |
+| CrewAI agent | `crewai_integration.py` |
+| Webhook-based (non-blocking) approvals | `webhook_server.py` |
+| Comparing all three approval modes | `approval_workflows_demo.py` |
+
+---
+
+## Setup
 
 ```bash
-pip install ardenpy
-python examples/getting_started.py
+export ARDEN_API_KEY="arden_live_..."    # from app.arden.sh
+export OPENAI_API_KEY="sk-..."           # for examples that use GPT
 ```
+
+---
 
 ## Examples
 
-### 🚀 **getting_started.py** - Start Here!
-The simplest possible introduction to Arden protection.
+### `getting_started.py`
+The minimal Arden integration. Wraps three plain functions with `guard_tool()` and shows allow / approval / block in action. No external dependencies beyond `ardenpy`.
 
-### 🤖 **simple_agent.py** 
-Basic agent with common protected operations.
-
-### 🛠️ **custom_agent.py**
-Custom AI assistant with interactive demo.
-
-### 🔄 **approval_workflows_demo.py** - NEW! Approval Workflows
-Demonstrates all three approval modes:
-- **Wait mode** (default): Blocks until approval/denial
-- **Async mode**: Non-blocking with callbacks  
-- **Webhook mode**: Real-time webhook notifications
-
-### 🌐 **production_webhook_server.py** - Production Webhooks
-Complete production-ready webhook server for scalable approval workflows. Shows how to implement non-blocking approvals in production systems.
-
-### 🌟 **direct_openai_integration.py** - Direct OpenAI
-Shows direct OpenAI integration without frameworks. Use when building custom agents.
-
-**Requirements**: 
 ```bash
-export OPENAI_API_KEY="your_openai_key"
-export ARDEN_API_KEY="test_12345_your_arden_key"
+pip install ardenpy
+python getting_started.py
+```
+
+---
+
+### `custom_agent.py`
+Custom OpenAI Chat Completions loop using `guard_tool()` directly. The right pattern when you need per-tool control over the Arden name or approval mode.
+
+```bash
+pip install ardenpy openai
+python custom_agent.py
+```
+
+---
+
+### `direct_openai_integration.py`
+Same as `custom_agent.py` but uses `ArdenToolExecutor` — the recommended helper for Chat Completions dispatch loops. Register tools once, call `executor.run(name, args)` in the loop.
+
+```bash
+pip install ardenpy openai
 python direct_openai_integration.py
 ```
 
-## Framework Integrations
+---
 
-### 🦜 **langchain_integration.py** - LangChain + Arden
-Complete LangChain agent with Arden-protected tools.
+### `autogpt_integration.py`
+Autonomous agent that loops until its goal is complete, using `ArdenToolExecutor`. Demonstrates how Arden policies gate each tool call even when the agent is running unsupervised.
 
-**Requirements**: 
 ```bash
-pip install langchain langchain-openai ardenpy requests
-export OPENAI_API_KEY="your_openai_key"
-export ARDEN_API_KEY="test_12345_your_arden_key"
-python langchain_integration.py
-```
-
-### 👥 **crewai_integration.py** - CrewAI + Arden  
-Multi-agent CrewAI crew with Arden protection.
-
-**Requirements**:
-```bash
-pip install crewai crewai-tools ardenpy requests
-export OPENAI_API_KEY="your_openai_key"
-export ARDEN_API_KEY="test_12345_your_arden_key"
-python crewai_integration.py
-```
-
-### 🤖 **autogpt_integration.py** - AutoGPT + Arden
-Autonomous agent with Arden-protected commands.
-
-**Requirements**:
-```bash
-pip install openai ardenpy requests
-export OPENAI_API_KEY="your_openai_key"
-export ARDEN_API_KEY="test_12345_your_arden_key"
+pip install ardenpy openai
 python autogpt_integration.py
 ```
 
+---
 
-## Configuration
+### `langchain_integration.py`
+LangChain `AgentExecutor` with Arden protection via `protect_tools()`. One call wraps all tools — no per-class boilerplate.
 
-```python
-from ardenpy import configure
-
-# Test environment (auto-detected from key prefix)
-configure(api_key="test_12345_your_api_key_here")
-
-# Production environment
-configure(api_key="live_67890_your_api_key", environment="live")
+```bash
+pip install "ardenpy[langchain]" langchain-community langchain-openai
+python langchain_integration.py
 ```
 
-## Framework Integration Pattern
+---
 
-All frameworks use the same Arden pattern:
+### `crewai_integration.py`
+CrewAI agent using `protect_tools()` from `ardenpy.integrations.crewai`. Define plain `BaseTool` subclasses, then wrap them all at once.
 
-```python
-from ardenpy import guard_tool
-
-# 1. Protect your functions
-safe_function = guard_tool("policy.name", original_function)
-
-# 2. Use in any framework
-# LangChain: Tool(func=safe_function)
-# CrewAI: BaseTool with safe_function
-# Custom: self.tool = safe_function
+```bash
+pip install "ardenpy[crewai]" crewai
+python crewai_integration.py
 ```
 
-## Getting Help
+---
 
-- **Get API Key**:
-   - Visit [https://arden.sh](https://arden.sh)
-   - Sign up and get your free test API key
-- **Website**: [https://arden.sh](https://arden.sh)
-- **Dashboard**: [https://arden.sh/dashboard](https://arden.sh/dashboard)
-- **Support**: [team@arden.sh](mailto:team@arden.sh)
+### `webhook_server.py`
+Flask server that receives Arden approval/denial webhooks. Use this when your process can't block — tool calls return a `PendingApproval` immediately, and the server re-executes the function once an admin approves on the dashboard.
+
+```bash
+pip install ardenpy flask
+export ARDEN_SIGNING_KEY="..."   # from dashboard webhook settings
+python webhook_server.py
+```
+
+---
+
+### `approval_workflows_demo.py`
+Side-by-side comparison of all three approval modes (`wait`, `async`, `webhook`) using the same tool functions. Good reference for choosing the right mode.
+
+```bash
+pip install ardenpy
+python approval_workflows_demo.py
+```
+
+---
+
+## Key concept: guard_tool vs protect_tools
+
+| API | When to use |
+|-----|------------|
+| `arden.guard_tool(name, fn)` | Custom / no-framework agents, or when you need per-tool control |
+| `protect_tools(tools)` from `ardenpy.integrations.*` | LangChain or CrewAI — wraps all tools at once |
+| `ArdenToolExecutor` from `ardenpy.integrations.openai` | OpenAI Chat Completions tool-call dispatch loop |
+
+**Do not use both on the same function** — the policy check would run twice.
