@@ -92,6 +92,8 @@ ardenpy.configure(
     poll_interval: float | None = None,
     max_poll_time: float | None = None,
     retry_attempts: int | None = None,
+    signing_key: str | None = None,
+    tool_name_prefix: str | None = None,
 ) -> ArdenConfig
 ```
 
@@ -108,6 +110,8 @@ Sets the global SDK configuration. Returns the resulting `ArdenConfig` instance.
 | `poll_interval` | `float` | `2.0` | Seconds between status checks when polling for approval in `wait` or `async` modes. |
 | `max_poll_time` | `float` | `300.0` | Maximum total seconds to wait for a human decision before raising `ApprovalTimeoutError`. Applies to `wait` and `async` modes. |
 | `retry_attempts` | `int` | `3` | Number of times to retry a failed HTTP request before raising `ArdenError`. |
+| `signing_key` | `str` | `None` | HMAC-SHA256 signing key for verifying incoming webhook payloads. |
+| `tool_name_prefix` | `str` | `None` | Prefix prepended to tool names in the auto-patch path. For example, `"support"` causes tool names to appear as `"support.search_web"` in the dashboard. If omitted, the framework's raw `tool.name` is used. Has no effect on `guard_tool()` calls, which receive their name explicitly. |
 
 **Returns** — `ArdenConfig`
 
@@ -116,8 +120,9 @@ Sets the global SDK configuration. Returns the resulting `ArdenConfig` instance.
 
 **Notes**
 
-- `configure()` must be called before any `guard_tool()` call. Calling `guard_tool()` before `configure()` raises `ArdenError`.
-- Calling `configure()` a second time overwrites the previous configuration globally. If multiple parts of your application need different configurations, use separate processes or the `ArdenClient` directly.
+- `configure()` must be called before any `guard_tool()` call.
+- `configure()` automatically detects and patches installed AI frameworks (LangChain, CrewAI). After it returns, all tool instances from those frameworks have their calls intercepted — no explicit wrapping is needed. See [Framework Integrations](#framework-integrations).
+- Calling `configure()` a second time overwrites the previous configuration globally and updates the auto-patch prefix immediately.
 - The `api_key` can also be set via the `ARDEN_API_KEY` environment variable. If both are provided, the explicit parameter takes precedence.
 
 **Example**
@@ -1208,23 +1213,21 @@ logging.getLogger("ardenpy").setLevel(logging.DEBUG)
 
 ## Framework Integrations
 
-### Mental model: wrap everything, control via policies
+### How it works
 
-Pass **all** your tools through Arden — you don't need to decide upfront which ones are sensitive. Tools with a policy configured in the dashboard are enforced (allow / require approval / block). Tools with no policy are automatically allowed and logged with `reason: no_policy_configured`. This gives you full visibility from day one and lets you add enforcement incrementally.
+Pass all your tools through Arden — you don't need to decide upfront which ones are sensitive. Tools with a policy configured in the dashboard are enforced (allow / block / require approval). Tools with no policy pass through automatically and are logged with `reason: no_policy_configured`, giving you full visibility from day one.
 
-### When to use what
+### What to use
 
-| Situation | Recommended API |
-|-----------|----------------|
-| LangChain agent | `from ardenpy.integrations.langchain import protect_tools` |
-| CrewAI agent | `from ardenpy.integrations.crewai import protect_tools` |
-| OpenAI Chat Completions loop | `from ardenpy.integrations.openai import ArdenToolExecutor` |
-| OpenAI Agents SDK | `from ardenpy.integrations.openai import protect_function_tools` |
-| Custom / no framework | `arden.guard_tool()` directly |
+| Situation | How |
+|-----------|-----|
+| LangChain agent | Just `configure()` — auto-patched at startup |
+| CrewAI agent | Just `configure()` — auto-patched at startup |
+| OpenAI Chat Completions loop | `ArdenToolExecutor` |
+| OpenAI Agents SDK | `protect_function_tools()` |
+| Custom / no framework | `guard_tool()` |
 
-> **Do not mix.** If a tool already calls `guard_tool` internally (e.g. inside its `_run` method), do not also pass it through `protect_tools()`. The policy check would run twice, creating duplicate action records and double approval prompts.
-
-Import from `ardenpy.integrations.<framework>`. Install extras as needed:
+Install optional framework dependencies as needed:
 
 ```bash
 pip install "ardenpy[langchain]"      # LangChain
@@ -1235,16 +1238,43 @@ pip install "ardenpy[all]"            # everything
 
 ---
 
-### LangChain Integration
+### LangChain and CrewAI — auto-patched
 
-**`protect_tools(tools, approval_mode="wait", on_approval=None, on_denial=None, tool_name_prefix="langchain")`**
+`configure()` patches `BaseTool.run` on LangChain and CrewAI's base class at startup. Every tool instance in the process — including ones created after `configure()` returns — has its calls intercepted automatically. No explicit wrapping is needed.
 
-Wraps a list of LangChain `BaseTool` / `Tool` objects with Arden policy enforcement. Returns a new list of `Tool` objects. The Arden policy name for each tool is `{tool_name_prefix}.{tool.name}`.
+```python
+import ardenpy as arden
+
+arden.configure(api_key="arden_live_...", tool_name_prefix="support")
+# All LangChain / CrewAI tool calls are now intercepted.
+
+# LangChain — use normally
+agent = create_react_agent(llm, tools, prompt)
+
+# CrewAI — use normally
+agent = Agent(role="Support Agent", tools=[RefundTool(), EmailTool()], ...)
+```
+
+Tool names in the dashboard will be `{tool_name_prefix}.{tool.name}` — e.g. `"support.search_web"`, `"support.issue_refund"`. If `tool_name_prefix` is not set, the raw `tool.name` is used.
+
+---
+
+### `protect_tools()` — explicit override (optional)
+
+For cases where you need a specific `approval_mode`, per-call `on_approval`/`on_denial` callbacks, or a different prefix for a subset of tools, use `protect_tools()` explicitly. Tools wrapped with `protect_tools()` are marked internally so the auto-patch skips them — no double-checking.
+
+**LangChain**
 
 ```python
 from ardenpy.integrations.langchain import protect_tools
 
-safe_tools = protect_tools(raw_tools, approval_mode="wait", tool_name_prefix="support")
+safe_tools = protect_tools(
+    raw_tools,
+    tool_name_prefix="support",
+    approval_mode="webhook",
+    on_approval=my_approval_handler,
+    on_denial=my_denial_handler,
+)
 ```
 
 | Parameter | Type | Default | Description |
@@ -1255,11 +1285,27 @@ safe_tools = protect_tools(raw_tools, approval_mode="wait", tool_name_prefix="su
 | `on_denial` | callable | `None` | Required for `async`/`webhook` modes |
 | `tool_name_prefix` | `str` | `"langchain"` | Prefix for Arden policy names |
 
+**CrewAI**
+
+```python
+from ardenpy.integrations.crewai import protect_tools
+
+safe_tools = protect_tools(
+    [RefundTool(), EmailTool()],
+    tool_name_prefix="stripe",
+    approval_mode="async",
+    on_approval=handle_approval,
+    on_denial=handle_denial,
+)
+```
+
+Same parameter signature as LangChain. Default prefix is `"crewai"`.
+
 ---
 
-**`ArdenCallbackHandler(tool_name_prefix="langchain")`**
+### `ArdenCallbackHandler` (LangChain observability)
 
-LangChain callback handler that logs every tool invocation to Arden's action log without blocking execution. Use for observability when you don't need policy enforcement on every tool, or alongside `protect_tools()` to capture tools you haven't explicitly wrapped.
+Logs every tool call to Arden without blocking execution. Attach to `AgentExecutor` for full visibility without enforcement — useful alongside auto-patching when you want to capture non-tool events too.
 
 ```python
 from ardenpy.integrations.langchain import ArdenCallbackHandler
@@ -1270,57 +1316,34 @@ executor = AgentExecutor(agent=agent, tools=tools, callbacks=[ArdenCallbackHandl
 
 ---
 
-### CrewAI Integration
-
-**`protect_tools(tools, approval_mode="wait", on_approval=None, on_denial=None, tool_name_prefix="crewai")`**
-
-Wraps a list of CrewAI `BaseTool` instances by patching their `_run` method in place. Returns the same list for convenience. The Arden policy name is `{tool_name_prefix}.{tool.name}`.
-
-```python
-from ardenpy.integrations.crewai import protect_tools
-
-safe_tools = protect_tools([RefundTool(), EmailTool()], tool_name_prefix="stripe")
-agent = Agent(role="Support", tools=safe_tools, ...)
-```
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `tools` | `list` | required | CrewAI `BaseTool` instances |
-| `approval_mode` | `str` | `"wait"` | `"wait"`, `"async"`, or `"webhook"` |
-| `on_approval` | callable | `None` | Required for `async`/`webhook` modes |
-| `on_denial` | callable | `None` | Required for `async`/`webhook` modes |
-| `tool_name_prefix` | `str` | `"crewai"` | Prefix for Arden policy names |
-
----
-
-### OpenAI Integration
+### OpenAI Chat Completions — `ArdenToolExecutor`
 
 **`ArdenToolExecutor(approval_mode="wait", on_approval=None, on_denial=None, tool_name_prefix="openai")`**
 
-Dispatch table for the OpenAI Chat Completions tool-call loop. Register functions once, then call `run()` for each tool_call in the model response.
+Dispatch table for the OpenAI Chat Completions tool-call loop. Register all functions once; Arden checks policy on each `run()` call.
 
 ```python
 from ardenpy.integrations.openai import ArdenToolExecutor
 
 executor = ArdenToolExecutor(tool_name_prefix="stripe")
 executor.register("issue_refund", issue_refund)
+executor.register("send_email",   send_email)
 
-result = executor.run("issue_refund", {"amount": 150.0, "customer_id": "cus_abc"})
+# In your tool-call dispatch loop:
+result = executor.run(tc.function.name, json.loads(tc.function.arguments))
 ```
 
-**`executor.register(name, func, arden_name=None)`**
+**`executor.register(name, func, arden_name=None)`** — Register a function. `arden_name` overrides the default `{prefix}.{name}` if you need a custom policy path.
 
-Register a function under a tool name. `arden_name` overrides the default `{prefix}.{name}` if you need a custom policy path.
-
-**`executor.run(name, arguments)`**
-
-Execute a registered tool with `arguments` dict. Raises `PolicyDeniedError` if blocked. Raises `KeyError` if `name` was not registered.
+**`executor.run(name, arguments)`** — Execute a registered tool. Raises `PolicyDeniedError` if blocked. Raises `KeyError` if `name` was not registered.
 
 ---
 
+### OpenAI Agents SDK — `protect_function_tools()`
+
 **`protect_function_tools(tools, approval_mode="wait", on_approval=None, on_denial=None, tool_name_prefix="openai")`**
 
-Wraps OpenAI Agents SDK `FunctionTool` objects (created with `@function_tool`) by patching their underlying callable. Returns the same list.
+Wraps the underlying callable on `FunctionTool` objects (created with `@function_tool`). Returns the same list.
 
 ```python
 from agents import function_tool

@@ -1,9 +1,9 @@
 """
 CrewAI Integration with Arden
 
-Shows how to protect CrewAI tools using protect_tools() from
-ardenpy.integrations.crewai. This is the recommended approach for
-CrewAI agents — define plain BaseTool classes, then wrap them all at once.
+Arden automatically patches CrewAI at configure() time — no explicit wrapping
+required. Define plain BaseTool subclasses as usual and pass them directly to
+your agent. Every _run() call is intercepted automatically.
 
 Requirements:
     pip install "ardenpy[crewai]" crewai
@@ -19,10 +19,10 @@ from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
 import ardenpy as arden
-from ardenpy.integrations.crewai import protect_tools
 
+# That's it. Arden patches CrewAI's BaseTool at import time.
+# Tool names in the dashboard: "support.web_search", "support.issue_refund", etc.
 arden.configure(api_key=os.environ["ARDEN_API_KEY"])
-os.environ["OPENAI_API_KEY"] = os.environ["OPENAI_API_KEY"]
 
 
 # ── Define plain BaseTool classes — no guard_tool boilerplate ─────────────────
@@ -66,29 +66,21 @@ class EmailTool(BaseTool):
         return f"Email sent to {to}: '{subject}'"
 
 
-# ── Wrap all tools at once with Arden ────────────────────────────────────────
-# Arden policy names: "stripe.web_search", "stripe.issue_refund", "stripe.send_email"
+# ── Build the CrewAI agent and crew — tools passed directly ──────────────────
 
-safe_tools = protect_tools(
-    [WebSearchTool(), RefundTool(), EmailTool()],
-    tool_name_prefix="stripe",
-    approval_mode="wait",
-)
-
-
-# ── Build the CrewAI agent and crew ──────────────────────────────────────────
+tools = [WebSearchTool(), RefundTool(), EmailTool()]
 
 support_agent = Agent(
     role="Customer Support Specialist",
     goal="Resolve customer issues efficiently and accurately",
     backstory="You are a senior support specialist who handles refunds and inquiries.",
-    tools=safe_tools,
+    tools=tools,
     verbose=True,
 )
 
 task = Task(
-    description="Issue a refund of $150 to customer cus_abc and send them a confirmation email.",
-    expected_output="Confirmation that the refund was issued and email sent.",
+    description="A customer says their order arrived damaged. Their ID is cus_abc. Resolve the issue.",
+    expected_output="Confirmation of how the issue was resolved.",
     agent=support_agent,
 )
 

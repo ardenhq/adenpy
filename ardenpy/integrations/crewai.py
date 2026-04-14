@@ -32,6 +32,7 @@ import logging
 from typing import Any, List, Optional
 
 from ..guard import guard_tool
+from .._autopatch import ARDEN_GUARDED
 
 logger = logging.getLogger(__name__)
 
@@ -41,26 +42,22 @@ def protect_tools(
     approval_mode: str = "wait",
     on_approval=None,
     on_denial=None,
-    tool_name_prefix: str = "crewai",
 ) -> List[Any]:
     """Wrap a list of CrewAI tools with Arden policy enforcement.
 
-    Pass **all** your tools — you don't need to decide upfront which ones are
-    sensitive. Tools that have a policy configured in the Arden dashboard are
-    enforced (allow / require approval / block). Tools with no policy are
-    automatically allowed and logged, giving you full visibility from day one.
+    Use this when you need per-tool approval mode overrides. For the common
+    case, just call ``arden.configure()`` — Arden auto-patches CrewAI and
+    every tool call is intercepted automatically without any wrapping.
 
     Each tool's ``_run`` method is wrapped with :func:`ardenpy.guard_tool`.
-    The Arden tool name is ``{prefix}.{tool.name}``. Create a matching policy
-    in the dashboard for any tool you want to control.
+    The tool name sent to the Arden policy engine is ``tool.name`` directly.
+    Create a matching policy in the dashboard for any tool you want to control.
 
     Args:
         tools: List of CrewAI ``BaseTool`` instances.
         approval_mode: ``"wait"`` (default), ``"async"``, or ``"webhook"``.
         on_approval: Callback for ``async``/``webhook`` modes.
         on_denial: Callback for ``async``/``webhook`` modes.
-        tool_name_prefix: Prefix for the Arden tool name. Set this to your
-            service name for clearer policies, e.g. ``"stripe"`` or ``"finance"``.
 
     Returns:
         The same list of tools with ``_run`` replaced by Arden-protected versions.
@@ -68,18 +65,18 @@ def protect_tools(
 
     Example::
 
-        # Wrap ALL tools — Arden enforces only the ones with policies configured
+        # Only needed for per-tool approval mode overrides.
+        # For standard use, just call arden.configure() — no wrapping required.
         safe_tools = protect_tools(
-            [SearchTool(), RefundTool(), EmailTool(), DeleteTool()],
-            tool_name_prefix="support",
+            [RefundTool()],
+            approval_mode="async",
+            on_approval=handle_approval,
+            on_denial=handle_denial,
         )
         agent = Agent(role="Support", tools=safe_tools, ...)
-
-        # In the dashboard, create a policy for "support.issue_refund" to require
-        # approval. All other tools pass through automatically.
     """
     for tool in tools:
-        arden_tool_name = f"{tool_name_prefix}.{tool.name}"
+        arden_tool_name = tool.name
         original_run = tool._run
 
         guarded_run = guard_tool(
@@ -93,6 +90,8 @@ def protect_tools(
         # Patch the instance method
         import types
         tool._run = types.MethodType(lambda self, *a, **kw: guarded_run(*a, **kw), tool)
-        logger.debug(f"Arden protection applied to CrewAI tool '{tool.name}' as '{arden_tool_name}'")
+        # Mark so the class-level auto-patch skips this instance.
+        setattr(tool, ARDEN_GUARDED, True)
+        logger.debug(f"Arden protection applied to CrewAI tool '{tool.name}'")
 
     return tools

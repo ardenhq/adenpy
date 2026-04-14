@@ -120,6 +120,21 @@ def configure(
         config_dict['signing_key'] = signing_key
 
     _config = ArdenConfig(**config_dict)
+
+    # Auto-patch installed frameworks so tool calls are intercepted without
+    # any explicit wrapping.  Failures are swallowed — a broken framework
+    # import should never prevent configure() from succeeding.
+    try:
+        from . import _autopatch
+        patched = _autopatch.patch_all()
+        if patched:
+            import logging as _logging
+            _logging.getLogger(__name__).debug(
+                "Arden: auto-patched frameworks: %s", ", ".join(patched)
+            )
+    except Exception:
+        pass
+
     return _config
 
 

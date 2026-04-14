@@ -108,145 +108,149 @@ def guard_tool(
             "Arden must be configured before using guard_tool(). "
             "Call configure(api_url=...) first."
         )
-    
+
     @functools.wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         """Wrapper function that enforces policy before calling the original function."""
-        client = ArdenClient()
-        
-        try:
-            # Extract function signature for better argument handling
-            sig = inspect.signature(func)
-            bound_args = sig.bind(*args, **kwargs)
-            bound_args.apply_defaults()
-            
-            # Convert arguments to serializable format.
-            # Use bound_args.arguments (all named bindings) rather than
-            # bound_args.kwargs (keyword-only) so positional args like
-            # issue_refund(50.0) are sent as {"amount": 50.0} and can be
-            # evaluated by policy rules.
-            serializable_args = _make_serializable(list(args))
-            serializable_kwargs = _make_serializable(dict(bound_args.arguments))
-            
-            # Check policy
-            logger.debug(f"Checking policy for tool '{tool_name}'")
-            response = client.check_tool_call(
-                tool_name=tool_name,
-                args=serializable_args,
-                kwargs=serializable_kwargs,
+        # Validate callbacks before making any network calls so the error is
+        # immediate and clear (no need to wait for a requires_approval response).
+        if approval_mode in ("async", "webhook") and (not on_approval or not on_denial):
+            raise ArdenError(
+                f"approval_mode={approval_mode!r} requires both on_approval and on_denial callbacks"
             )
-            
-            # Handle policy decision
-            if response.decision == PolicyDecision.ALLOW:
-                if response.reason == 'no_policy_configured':
-                    logger.debug(f"Tool '{tool_name}' allowed: no policy configured (action_id: {response.action_id})")
-                else:
-                    logger.debug(f"Policy allows tool '{tool_name}'")
-                return func(*args, **kwargs)
-            
-            elif response.decision == PolicyDecision.REQUIRE_APPROVAL:
-                if not response.action_id:
-                    raise ArdenError("Policy requires approval but no action_id provided")
-                
-                logger.info(f"Tool '{tool_name}' requires approval, action_id: {response.action_id}")
-                
-                # Handle different approval modes
-                if approval_mode == "wait":
-                    # Wait mode: Block until approval/denial (default behavior)
-                    status = client.wait_for_approval(response.action_id)
-                    
-                    if status.status.value == "approved":
-                        logger.info(f"Tool '{tool_name}' approved, executing")
-                        return func(*args, **kwargs)
-                    else:
-                        raise PolicyDeniedError(
-                            f"Tool call was denied: {status.message or 'No reason provided'}",
-                            tool_name=tool_name
-                        )
-                
-                elif approval_mode == "async":
-                    # Async mode: Start background polling and return immediately
-                    if not on_approval or not on_denial:
-                        raise ArdenError("Async mode requires both on_approval and on_denial callbacks")
 
-                    _start_async_approval_polling(
-                        response.action_id, func, args, kwargs,
-                        tool_name, on_approval, on_denial
-                    )
-                    return PendingApproval(action_id=response.action_id, tool_name=tool_name)
+        # Extract function signature so positional args like issue_refund(50.0)
+        # are sent as {"amount": 50.0} and can be evaluated by policy rules.
+        sig = inspect.signature(func)
+        bound_args = sig.bind(*args, **kwargs)
+        bound_args.apply_defaults()
+        context = _make_serializable(dict(bound_args.arguments))
 
-                elif approval_mode == "webhook":
-                    # Webhook mode: register callbacks; return PendingApproval immediately.
-                    # When the admin approves/denies on the dashboard, the Arden backend
-                    # POSTs to your webhook URL.  Call arden.handle_webhook(body, headers)
-                    # from your web framework — it will invoke on_approval(event) or
-                    # on_denial(event) with a WebhookEvent containing all the context.
-                    if not on_approval or not on_denial:
-                        raise ArdenError("Webhook mode requires both on_approval and on_denial callbacks")
+        return _run_with_policy_check(
+            tool_name=tool_name,
+            context=context,
+            executor=lambda: func(*args, **kwargs),
+            approval_mode=approval_mode,
+            on_approval=on_approval,
+            on_denial=on_denial,
+        )
 
-                    _register_webhook_callbacks(response.action_id, tool_name, on_approval, on_denial)
-                    return PendingApproval(action_id=response.action_id, tool_name=tool_name)
-                
-                else:
-                    raise ArdenError(f"Unknown approval_mode: {approval_mode}. Use 'wait', 'async', or 'webhook'")
-            
-            elif response.decision == PolicyDecision.BLOCK:
-                raise PolicyDeniedError(
-                    response.message or f"Tool '{tool_name}' is blocked by policy",
-                    tool_name=tool_name
-                )
-            
-            else:
-                raise ArdenError(f"Unknown policy decision: {response.decision}")
-        
-        finally:
-            client.close()
-    
     return cast(F, wrapper)
+
+
+def _run_with_policy_check(
+    tool_name: str,
+    context: Dict[str, Any],
+    executor: Callable,
+    approval_mode: str = "wait",
+    on_approval: Optional[Callable] = None,
+    on_denial: Optional[Callable] = None,
+) -> Any:
+    """Core policy-check-and-execute logic shared by guard_tool() and auto-patch.
+
+    Args:
+        tool_name: Arden policy name for this tool.
+        context: Dict of args to send to the policy engine.
+        executor: Zero-argument callable that executes the original tool call.
+        approval_mode: ``"wait"``, ``"async"``, or ``"webhook"``.
+        on_approval: Callback for async/webhook modes.
+        on_denial: Callback for async/webhook modes.
+    """
+    client = ArdenClient()
+    try:
+        logger.debug(f"Checking policy for tool '{tool_name}'")
+        response = client.check_tool_call(
+            tool_name=tool_name,
+            args=[],
+            kwargs=context,
+        )
+
+        if response.decision == PolicyDecision.ALLOW:
+            if response.reason == 'no_policy_configured':
+                logger.debug(f"Tool '{tool_name}' allowed: no policy configured (action_id: {response.action_id})")
+            else:
+                logger.debug(f"Policy allows tool '{tool_name}'")
+            return executor()
+
+        elif response.decision == PolicyDecision.REQUIRE_APPROVAL:
+            if not response.action_id:
+                raise ArdenError("Policy requires approval but no action_id provided")
+
+            logger.info(f"Tool '{tool_name}' requires approval, action_id: {response.action_id}")
+
+            if approval_mode == "wait":
+                status = client.wait_for_approval(response.action_id)
+                if status.status.value == "approved":
+                    logger.info(f"Tool '{tool_name}' approved, executing")
+                    return executor()
+                else:
+                    raise PolicyDeniedError(
+                        f"Tool call was denied: {status.message or 'No reason provided'}",
+                        tool_name=tool_name,
+                    )
+
+            elif approval_mode == "async":
+                if not on_approval or not on_denial:
+                    raise ArdenError("Async mode requires both on_approval and on_denial callbacks")
+                _start_async_approval_polling(
+                    response.action_id, executor, tool_name, on_approval, on_denial
+                )
+                return PendingApproval(action_id=response.action_id, tool_name=tool_name)
+
+            elif approval_mode == "webhook":
+                if not on_approval or not on_denial:
+                    raise ArdenError("Webhook mode requires both on_approval and on_denial callbacks")
+                _register_webhook_callbacks(response.action_id, tool_name, on_approval, on_denial)
+                return PendingApproval(action_id=response.action_id, tool_name=tool_name)
+
+            else:
+                raise ArdenError(f"Unknown approval_mode: {approval_mode!r}. Use 'wait', 'async', or 'webhook'")
+
+        elif response.decision == PolicyDecision.BLOCK:
+            raise PolicyDeniedError(
+                response.message or f"Tool '{tool_name}' is blocked by policy",
+                tool_name=tool_name,
+            )
+
+        else:
+            raise ArdenError(f"Unknown policy decision: {response.decision}")
+
+    finally:
+        client.close()
 
 
 def _start_async_approval_polling(
     action_id: str,
-    func: Callable,
-    args: tuple,
-    kwargs: dict,
+    executor: Callable,
     tool_name: str,
     on_approval: Callable[[Any], None],
-    on_denial: Callable[[Exception], None]
+    on_denial: Callable[[Exception], None],
 ) -> None:
     """Start background thread to poll for approval status."""
 
     def poll_approval():
-        """Background polling function."""
         client = ArdenClient()
         try:
-            # Wait for approval in background thread
             status = client.wait_for_approval(action_id)
-            
             if status.status.value == "approved":
                 logger.info(f"Tool '{tool_name}' approved asynchronously, executing")
                 try:
-                    result = func(*args, **kwargs)
-                    on_approval(result)
+                    on_approval(executor())
                 except Exception as e:
                     logger.error(f"Error executing approved tool '{tool_name}': {e}")
                     on_denial(e)
             else:
-                error = PolicyDeniedError(
+                on_denial(PolicyDeniedError(
                     f"Tool call was denied: {status.message or 'No reason provided'}",
-                    tool_name=tool_name
-                )
-                on_denial(error)
-
+                    tool_name=tool_name,
+                ))
         except Exception as e:
             logger.error(f"Error in async approval polling for '{tool_name}': {e}")
             on_denial(e)
         finally:
             client.close()
 
-    # Start background thread
-    thread = threading.Thread(target=poll_approval, daemon=True)
-    thread.start()
+    threading.Thread(target=poll_approval, daemon=True).start()
 
 
 # Module-level registry mapping action_id → {on_approval, on_denial, tool_name}

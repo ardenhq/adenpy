@@ -10,15 +10,6 @@ Arden sits between your agent and its tools. Every call is checked against polic
 pip install ardenpy
 ```
 
-For framework integrations:
-
-```bash
-pip install "ardenpy[langchain]"     # LangChain
-pip install "ardenpy[crewai]"        # CrewAI
-pip install "ardenpy[openai-agents]" # OpenAI Agents SDK
-pip install "ardenpy[all]"           # everything
-```
-
 ## Quick start
 
 **1. Get your API key** from [app.arden.sh](https://app.arden.sh). You'll get two keys:
@@ -32,7 +23,19 @@ import ardenpy as arden
 arden.configure(api_key="arden_live_...")
 ```
 
-**3. Wrap your tools and call them normally**
+**3. Call your tools**
+
+For **LangChain and CrewAI** — that's it. Arden auto-patches the framework at configure-time, so every tool call is intercepted without any wrapping:
+
+```python
+# LangChain — use tools normally, Arden intercepts everything
+arden.configure(api_key="arden_live_...", tool_name_prefix="support")
+
+agent = create_react_agent(llm, tools, prompt)  # no wrapping needed
+# Tool names in the dashboard: "support.search_web", "support.send_email", etc.
+```
+
+For **custom agents with no framework**, wrap functions explicitly:
 
 ```python
 def issue_refund(amount: float, customer_id: str) -> dict:
@@ -65,12 +68,10 @@ Every tool call goes through a policy check before executing:
 When a tool requires approval, you choose how your code waits:
 
 **`wait` (default)** — blocks until a human acts, then executes or raises `PolicyDeniedError`.
-Good for scripts and synchronous code.
 
 **`async`** — returns a `PendingApproval` immediately, background thread polls and calls your callback.
-Good for long-running agents that can't block.
 
-**`webhook`** — returns `PendingApproval` immediately, no polling. Arden POSTs to your endpoint when an admin decides. Good for production services.
+**`webhook`** — returns `PendingApproval` immediately, no polling. Arden POSTs to your endpoint when an admin decides.
 
 ```python
 # wait (default)
@@ -91,26 +92,28 @@ For webhook setup (FastAPI, Flask, Django examples) see the [Library Reference](
 
 ## Framework integrations
 
-**Wrap all your tools — Arden enforces only the ones you configure policies for.**
-No need to cherry-pick which tools are risky. Tools with no policy pass through automatically, logged for visibility.
+### LangChain and CrewAI — zero wrapping required
 
-### LangChain
-
-```python
-from ardenpy.integrations.langchain import protect_tools
-
-safe_tools = protect_tools(all_my_tools, tool_name_prefix="support")
-# Arden name: "support.{tool.name}" — create policies in dashboard for any you want to control
-```
-
-### CrewAI
+Arden automatically patches LangChain and CrewAI's base tool class when `configure()` is called. Every tool instance — including ones created after configure — has its calls intercepted.
 
 ```python
-from ardenpy.integrations.crewai import protect_tools
+import ardenpy as arden
 
-safe_tools = protect_tools([RefundTool(), SearchTool()], tool_name_prefix="support")
-agent = Agent(role="Support", tools=safe_tools, ...)
+arden.configure(api_key="arden_live_...")
+# All LangChain / CrewAI tool calls in this process are now intercepted.
+# No protect_tools(), no guard_tool(), no boilerplate.
 ```
+
+Tool names in the dashboard match each tool's `.name` attribute directly (e.g. `"issue_refund"`). The API key already scopes calls to your agent, so no prefix is needed.
+
+Install the optional framework dependencies if you don't already have them:
+
+```bash
+pip install "ardenpy[langchain]"     # LangChain
+pip install "ardenpy[crewai]"        # CrewAI
+```
+
+If you need per-tool approval mode overrides, `protect_tools()` is still available — see the [Library Reference](LIBRARY_REFERENCE.md#framework-integrations).
 
 ### OpenAI Chat Completions
 
@@ -132,6 +135,10 @@ from ardenpy.integrations.openai import protect_function_tools
 
 safe_tools = protect_function_tools([issue_refund, search], tool_name_prefix="support")
 agent = Agent(name="SupportBot", tools=safe_tools)
+```
+
+```bash
+pip install "ardenpy[openai-agents]"
 ```
 
 See [examples/](examples/README.md) for runnable code for every integration.

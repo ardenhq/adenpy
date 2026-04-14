@@ -1,9 +1,9 @@
 """
 LangChain Integration with Arden
 
-Shows how to protect LangChain tools using protect_tools() from
-ardenpy.integrations.langchain. This is the recommended approach for
-LangChain agents — no per-tool boilerplate required.
+Arden automatically patches LangChain at configure() time — no explicit wrapping
+required. Every tool call in the process is intercepted without modifying how you
+build the agent.
 
 Requirements:
     pip install "ardenpy[langchain]" langchain-community langchain-openai
@@ -20,12 +20,13 @@ from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 
 import ardenpy as arden
-from ardenpy.integrations.langchain import protect_tools
 
+# That's it. Arden patches LangChain's BaseTool at configure() time.
+# Tool names in the dashboard match the tool's .name attribute directly.
 arden.configure(api_key=os.environ["ARDEN_API_KEY"])
 
 
-# ── Define your raw tool functions ───────────────────────────────────────────
+# ── Define your tool functions ────────────────────────────────────────────────
 
 def web_search(query: str) -> str:
     """Search the web (simulated)."""
@@ -42,17 +43,13 @@ def issue_refund(amount: float, customer_id: str) -> str:
     return f"Refund of ${amount} issued to {customer_id}"
 
 
-# ── Wrap into LangChain Tools ─────────────────────────────────────────────────
+# ── Wrap into LangChain Tools — no protect_tools() needed ────────────────────
 
-raw_tools = [
+tools = [
     Tool(name="web_search",   func=web_search,   description="Search the web for information."),
     Tool(name="send_email",   func=send_email,   description="Send an email. Args: to, subject, body separated by '|'."),
     Tool(name="issue_refund", func=issue_refund, description="Issue a refund. Args: amount, customer_id separated by '|'."),
 ]
-
-# protect_tools() wraps each tool's run() with Arden policy enforcement.
-# Arden policy names: "langchain.web_search", "langchain.send_email", "langchain.issue_refund"
-safe_tools = protect_tools(raw_tools, approval_mode="wait")
 
 
 # ── Build and run the agent ───────────────────────────────────────────────────
@@ -78,10 +75,13 @@ Question: {input}
 Thought: {agent_scratchpad}
 """)
 
-agent = create_react_agent(llm, safe_tools, prompt)
-executor = AgentExecutor(agent=agent, tools=safe_tools, verbose=True,
+agent = create_react_agent(llm, tools, prompt)
+executor = AgentExecutor(agent=agent, tools=tools, verbose=True,
                          handle_parsing_errors=True, max_iterations=5)
 
 if __name__ == "__main__":
-    result = executor.invoke({"input": "Issue a refund of $150 to customer cus_abc"})
+    # The agent decides which tools to call based on the user's message.
+    # Arden intercepts each tool call before it executes.
+    user_message = "A customer says their order arrived damaged. Their ID is cus_abc."
+    result = executor.invoke({"input": user_message})
     print(result["output"])

@@ -44,6 +44,7 @@ from typing import Any, Dict, List, Optional, Union
 from ..guard import guard_tool
 from ..client import ArdenClient
 from ..config import get_config
+from .._autopatch import ARDEN_GUARDED
 
 logger = logging.getLogger(__name__)
 
@@ -53,20 +54,16 @@ def protect_tools(
     approval_mode: str = "wait",
     on_approval=None,
     on_denial=None,
-    tool_name_prefix: str = "langchain",
 ) -> List[Any]:
     """Wrap a list of LangChain tools with Arden policy enforcement.
 
-    Pass **all** your tools — you don't need to decide upfront which ones are
-    sensitive. Tools that have a policy configured in the Arden dashboard are
-    enforced (allow / require approval / block). Tools with no policy are
-    automatically allowed and logged with ``reason: no_policy_configured``,
-    giving you full visibility from day one.
+    Use this when you need per-tool approval mode overrides. For the common
+    case, just call ``arden.configure()`` — Arden auto-patches LangChain and
+    every tool call is intercepted automatically without any wrapping.
 
     Each tool's ``run`` method is wrapped with :func:`ardenpy.guard_tool`.
-    The tool name sent to the Arden policy engine is ``{prefix}.{tool.name}``,
-    e.g. ``langchain.send_email``. Create a matching policy in the dashboard
-    for any tool you want to control.
+    The tool name sent to the Arden policy engine is ``tool.name`` directly.
+    Create a matching policy in the dashboard for any tool you want to control.
 
     Args:
         tools: List of LangChain ``BaseTool`` or ``Tool`` instances.
@@ -74,9 +71,6 @@ def protect_tools(
             See :func:`ardenpy.guard_tool` for details.
         on_approval: Callback for ``async``/``webhook`` modes.
         on_denial: Callback for ``async``/``webhook`` modes.
-        tool_name_prefix: Prefix used when building the Arden tool name.
-            Defaults to ``"langchain"``. Set to your service name for clearer
-            policy rules, e.g. ``"customer_support"``.
 
     Returns:
         New list of tools with Arden protection applied. The original tools
@@ -84,11 +78,14 @@ def protect_tools(
 
     Example::
 
-        # Wrap ALL tools — Arden enforces only the ones with policies configured
-        safe_tools = protect_tools(all_my_tools, tool_name_prefix="support")
-
-        # In the dashboard, create a policy for "support.issue_refund" to require
-        # approval. All other tools pass through automatically.
+        # Only needed for per-tool approval mode overrides.
+        # For standard use, just call arden.configure() — no wrapping required.
+        safe_tools = protect_tools(
+            [refund_tool],
+            approval_mode="async",
+            on_approval=handle_approval,
+            on_denial=handle_denial,
+        )
     """
     try:
         from langchain.tools import Tool as LangChainTool
@@ -100,7 +97,7 @@ def protect_tools(
 
     protected = []
     for tool in tools:
-        arden_tool_name = f"{tool_name_prefix}.{tool.name}"
+        arden_tool_name = tool.name
 
         # Wrap the synchronous run method
         guarded_run = guard_tool(
@@ -119,8 +116,10 @@ def protect_tools(
             func=guarded_run,
             description=tool.description,
         )
+        # Mark so the class-level auto-patch skips this instance.
+        setattr(protected_tool, ARDEN_GUARDED, True)
         protected.append(protected_tool)
-        logger.debug(f"Arden protection applied to LangChain tool '{tool.name}' as '{arden_tool_name}'")
+        logger.debug(f"Arden protection applied to LangChain tool '{tool.name}'")
 
     return protected
 

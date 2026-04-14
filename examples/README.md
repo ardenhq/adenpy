@@ -67,7 +67,7 @@ python autogpt_integration.py
 ---
 
 ### `langchain_integration.py`
-LangChain `AgentExecutor` with Arden protection via `protect_tools()`. One call wraps all tools — no per-class boilerplate.
+LangChain `AgentExecutor` with Arden auto-patching. Call `configure()` once and every tool in the process is intercepted — no `protect_tools()` required.
 
 ```bash
 pip install "ardenpy[langchain]" langchain-community langchain-openai
@@ -77,7 +77,7 @@ python langchain_integration.py
 ---
 
 ### `crewai_integration.py`
-CrewAI agent using `protect_tools()` from `ardenpy.integrations.crewai`. Define plain `BaseTool` subclasses, then wrap them all at once.
+CrewAI agent with Arden auto-patching. Call `configure()` once and every `BaseTool._run()` call in the process is intercepted — define plain subclasses as usual.
 
 ```bash
 pip install "ardenpy[crewai]" crewai
@@ -107,12 +107,14 @@ python approval_workflows_demo.py
 
 ---
 
-## Key concept: guard_tool vs protect_tools
+## Key concept: which API to use
 
-| API | When to use |
-|-----|------------|
-| `arden.guard_tool(name, fn)` | Custom / no-framework agents, or when you need per-tool control |
-| `protect_tools(tools)` from `ardenpy.integrations.*` | LangChain or CrewAI — wraps all tools at once |
-| `ArdenToolExecutor` from `ardenpy.integrations.openai` | OpenAI Chat Completions tool-call dispatch loop |
+| Situation | API |
+|-----------|-----|
+| LangChain or CrewAI | Just `arden.configure(api_key="...", tool_name_prefix="...")` — auto-patched |
+| OpenAI Agents SDK | `protect_function_tools()` from `ardenpy.integrations.openai` |
+| OpenAI Chat Completions loop | `ArdenToolExecutor` from `ardenpy.integrations.openai` |
+| Custom agent, no framework | `arden.guard_tool(name, fn)` for per-tool control |
+| LangChain/CrewAI with per-tool overrides | `protect_tools()` from `ardenpy.integrations.*` |
 
-**Do not use both on the same function** — the policy check would run twice.
+**Do not mix auto-patching with `protect_tools()` on the same tool** — the policy check would run twice. Tools wrapped explicitly with `protect_tools()` or `guard_tool()` are automatically skipped by the auto-patcher.
