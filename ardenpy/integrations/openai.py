@@ -55,6 +55,10 @@ logger = logging.getLogger(__name__)
 class ArdenToolExecutor:
     """Dispatch table for OpenAI Chat Completions tool calls with Arden enforcement.
 
+    Register **all** your tool functions — you don't need to decide upfront which
+    ones are sensitive. Arden enforces only the tools that have policies configured
+    in the dashboard; everything else is allowed and logged automatically.
+
     Register your tool functions once, then call ``run()`` for each tool_call
     in the model response. Arden policy is checked before the function executes.
 

@@ -45,8 +45,14 @@ def protect_tools(
 ) -> List[Any]:
     """Wrap a list of CrewAI tools with Arden policy enforcement.
 
+    Pass **all** your tools — you don't need to decide upfront which ones are
+    sensitive. Tools that have a policy configured in the Arden dashboard are
+    enforced (allow / require approval / block). Tools with no policy are
+    automatically allowed and logged, giving you full visibility from day one.
+
     Each tool's ``_run`` method is wrapped with :func:`ardenpy.guard_tool`.
-    The Arden tool name is ``{prefix}.{tool.name}``.
+    The Arden tool name is ``{prefix}.{tool.name}``. Create a matching policy
+    in the dashboard for any tool you want to control.
 
     Args:
         tools: List of CrewAI ``BaseTool`` instances.
@@ -62,19 +68,15 @@ def protect_tools(
 
     Example::
 
-        from crewai.tools import BaseTool
-        from ardenpy.integrations.crewai import protect_tools
+        # Wrap ALL tools — Arden enforces only the ones with policies configured
+        safe_tools = protect_tools(
+            [SearchTool(), RefundTool(), EmailTool(), DeleteTool()],
+            tool_name_prefix="support",
+        )
+        agent = Agent(role="Support", tools=safe_tools, ...)
 
-        class DeleteRecordTool(BaseTool):
-            name: str = "delete_record"
-            description: str = "Permanently delete a database record"
-
-            def _run(self, record_id: str) -> str:
-                ...
-
-        safe_tools = protect_tools([DeleteRecordTool()], tool_name_prefix="database")
-
-        agent = Agent(role="DBA", tools=safe_tools, ...)
+        # In the dashboard, create a policy for "support.issue_refund" to require
+        # approval. All other tools pass through automatically.
     """
     for tool in tools:
         arden_tool_name = f"{tool_name_prefix}.{tool.name}"

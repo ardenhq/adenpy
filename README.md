@@ -313,52 +313,49 @@ Arden ships first-class integrations for the most common agent frameworks.
 Install with the relevant extras:
 
 ```bash
-pip install "ardenpy[langchain]"   # LangChain
-pip install "ardenpy[crewai]"      # CrewAI
+pip install "ardenpy[langchain]"     # LangChain
+pip install "ardenpy[crewai]"        # CrewAI
 pip install "ardenpy[openai-agents]" # OpenAI Agents SDK
-pip install "ardenpy[all]"         # everything
+pip install "ardenpy[all]"           # everything
 ```
 
-### LangChain
+### The mental model
 
-Use `protect_tools()` to wrap an entire list of LangChain tools at once.
-Each tool's Arden policy name is `langchain.{tool.name}`.
+**Wrap all your tools. Control which ones get enforced via policies in the dashboard.**
+
+You don't need to decide upfront which tools are "risky" — pass everything through Arden. Tools that have a policy configured are enforced (allow / require approval / block). Tools with no policy configured are allowed through automatically, and the call is still logged so you have full visibility.
+
+This means you get a complete audit trail from day one, and you can add policies incrementally as you decide what to control.
+
+---
+
+### LangChain
 
 ```python
 import ardenpy as arden
 from ardenpy.integrations.langchain import protect_tools
-from langchain_community.tools import DuckDuckGoSearchRun
-from langchain.tools import Tool
 from langchain.agents import AgentExecutor, create_react_agent
 from langchain_openai import ChatOpenAI
 
 arden.configure(api_key="arden_live_...")
 
-def send_email(to: str, subject: str, body: str) -> str:
-    return f"Email sent to {to}"
-
-raw_tools = [
-    DuckDuckGoSearchRun(),
-    Tool(name="send_email", func=send_email, description="Send an email to a user"),
-]
-
-# Wrap all tools — policies are enforced when the agent calls them
-safe_tools = protect_tools(raw_tools, approval_mode="wait")
-
-agent = create_react_agent(ChatOpenAI(model="gpt-4o"), safe_tools, prompt)
-executor = AgentExecutor(agent=agent, tools=safe_tools)
-```
-
-**Observability only** — log all tool calls without blocking:
-
-```python
-from ardenpy.integrations.langchain import ArdenCallbackHandler
+# Pass ALL your tools — no need to cherry-pick
+# Tools without policies are automatically allowed and logged
+safe_tools = protect_tools(all_my_tools)
 
 executor = AgentExecutor(
-    agent=agent,
-    tools=tools,
-    callbacks=[ArdenCallbackHandler()],
+    agent=create_react_agent(ChatOpenAI(model="gpt-4o"), safe_tools, prompt),
+    tools=safe_tools,
 )
+```
+
+Each tool's Arden name is `langchain.{tool.name}` (e.g. `langchain.send_email`). Create a policy in the dashboard for any tool you want to control.
+
+Use `tool_name_prefix` to match your own naming convention:
+
+```python
+# Policy names become "support.send_email", "support.issue_refund", etc.
+safe_tools = protect_tools(all_my_tools, tool_name_prefix="support")
 ```
 
 ---
@@ -368,7 +365,7 @@ executor = AgentExecutor(
 ```python
 import ardenpy as arden
 from ardenpy.integrations.crewai import protect_tools
-from crewai import Agent, Task, Crew
+from crewai import Agent
 from crewai.tools import BaseTool
 
 arden.configure(api_key="arden_live_...")
@@ -376,29 +373,19 @@ arden.configure(api_key="arden_live_...")
 class RefundTool(BaseTool):
     name: str = "issue_refund"
     description: str = "Issue a refund to a customer"
-
     def _run(self, amount: float, customer_id: str) -> str:
         return f"Refund of ${amount} processed for {customer_id}"
 
-class EmailTool(BaseTool):
-    name: str = "send_email"
-    description: str = "Send an email to a user"
+class SearchTool(BaseTool):
+    name: str = "search"
+    description: str = "Search for information"
+    def _run(self, query: str) -> str:
+        return f"Results for: {query}"
 
-    def _run(self, to: str, subject: str, body: str) -> str:
-        return f"Email sent to {to}"
+# Wrap all tools — Arden enforces only the ones you've configured policies for
+safe_tools = protect_tools([RefundTool(), SearchTool()], tool_name_prefix="support")
 
-# Arden policy names: "stripe.issue_refund", "stripe.send_email"
-safe_tools = protect_tools(
-    [RefundTool(), EmailTool()],
-    tool_name_prefix="stripe",
-    approval_mode="wait",
-)
-
-support_agent = Agent(
-    role="Customer Support",
-    goal="Resolve customer issues",
-    tools=safe_tools,
-)
+agent = Agent(role="Customer Support", tools=safe_tools, ...)
 ```
 
 ---
@@ -406,25 +393,21 @@ support_agent = Agent(
 ### OpenAI Chat Completions (tool dispatch loop)
 
 ```python
-import json
-import ardenpy as arden
+import json, ardenpy as arden
 from ardenpy.integrations.openai import ArdenToolExecutor
 from openai import OpenAI
 
 arden.configure(api_key="arden_live_...")
 
-def issue_refund(amount: float, customer_id: str) -> dict:
-    return {"refund_id": "re_123", "amount": amount}
-
-def send_email(to: str, subject: str, body: str) -> str:
-    return f"Email sent to {to}"
-
-executor = ArdenToolExecutor(tool_name_prefix="stripe")
-executor.register("issue_refund", issue_refund)
-executor.register("send_email", send_email)
+# Register ALL tools — Arden decides what to enforce based on your policies
+executor = ArdenToolExecutor(tool_name_prefix="support")
+executor.register("search",       search_fn)
+executor.register("send_email",   send_email_fn)
+executor.register("issue_refund", issue_refund_fn)
+executor.register("delete_user",  delete_user_fn)
 
 client = OpenAI()
-messages = [{"role": "user", "content": "Refund $150 to customer cus_abc"}]
+messages = [{"role": "user", "content": "..."}]
 
 while True:
     response = client.chat.completions.create(model="gpt-4o", messages=messages, tools=[...])
@@ -450,30 +433,24 @@ from ardenpy.integrations.openai import protect_function_tools
 arden.configure(api_key="arden_live_...")
 
 @function_tool
-def issue_refund(amount: float, customer_id: str) -> str:
-    return f"Refund of ${amount} issued to {customer_id}"
+def issue_refund(amount: float, customer_id: str) -> str: ...
 
 @function_tool
-def delete_account(user_id: str) -> str:
-    return f"Account {user_id} deleted"
+def search(query: str) -> str: ...
 
-safe_tools = protect_function_tools(
-    [issue_refund, delete_account],
-    tool_name_prefix="stripe",
-)
-
+# Wrap all tools — policies control what gets enforced
+safe_tools = protect_function_tools([issue_refund, search], tool_name_prefix="support")
 agent = Agent(name="SupportBot", tools=safe_tools)
 ```
 
 ---
 
-### Any other framework
+### No framework / custom agents
 
-`guard_tool` wraps a plain Python function and works everywhere:
+`guard_tool` wraps a plain Python function:
 
 ```python
-safe_fn = arden.guard_tool("myservice.action_name", my_function)
-# use safe_fn anywhere you'd use my_function
+safe_fn = arden.guard_tool("support.action_name", my_function)
 ```
 
 ---

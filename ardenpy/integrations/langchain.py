@@ -57,9 +57,16 @@ def protect_tools(
 ) -> List[Any]:
     """Wrap a list of LangChain tools with Arden policy enforcement.
 
+    Pass **all** your tools — you don't need to decide upfront which ones are
+    sensitive. Tools that have a policy configured in the Arden dashboard are
+    enforced (allow / require approval / block). Tools with no policy are
+    automatically allowed and logged with ``reason: no_policy_configured``,
+    giving you full visibility from day one.
+
     Each tool's ``run`` method is wrapped with :func:`ardenpy.guard_tool`.
     The tool name sent to the Arden policy engine is ``{prefix}.{tool.name}``,
-    e.g. ``langchain.send_email``.
+    e.g. ``langchain.send_email``. Create a matching policy in the dashboard
+    for any tool you want to control.
 
     Args:
         tools: List of LangChain ``BaseTool`` or ``Tool`` instances.
@@ -77,17 +84,11 @@ def protect_tools(
 
     Example::
 
-        from langchain_community.tools import DuckDuckGoSearchRun
-        from langchain.tools import Tool
+        # Wrap ALL tools — Arden enforces only the ones with policies configured
+        safe_tools = protect_tools(all_my_tools, tool_name_prefix="support")
 
-        raw_tools = [
-            DuckDuckGoSearchRun(),
-            Tool(name="send_email", func=send_email, description="Send an email"),
-        ]
-
-        safe_tools = protect_tools(raw_tools, approval_mode="wait")
-        # safe_tools[0] enforces policy for "langchain.duckduckgosearch"
-        # safe_tools[1] enforces policy for "langchain.send_email"
+        # In the dashboard, create a policy for "support.issue_refund" to require
+        # approval. All other tools pass through automatically.
     """
     try:
         from langchain.tools import Tool as LangChainTool

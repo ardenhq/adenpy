@@ -1,402 +1,158 @@
-# Arden REST API Specification
+# Arden API Reference
 
-This document defines the REST API that backends must implement to work with the Arden Python SDK, including support for the hybrid approval workflow modes.
+This document describes the REST API calls the ardenpy SDK makes to the Arden backend.
+You only need this if you're building a custom backend or debugging SDK behaviour.
+For normal SDK usage, see the [README](README.md).
 
-## Base URL
-- **Test Environment**: `https://api-test.arden.sh`
-- **Production Environment**: `https://api.arden.sh`
+---
 
 ## Authentication
-All requests must include:
+
+Every request includes the API key in the `X-API-Key` header:
+
 ```
-Authorization: Bearer {api_key}
+X-API-Key: arden_live_...
 Content-Type: application/json
-User-Agent: Arden-SDK/0.1.0
 ```
 
-## Core Endpoints
+API key formats:
+- Live keys: `arden_live_<32 hex chars>` — hits `https://api.arden.sh`
+- Test keys: `arden_test_<32 hex chars>` — hits `https://api-test.arden.sh`
 
-### 1. Policy Check
-**Endpoint**: `POST /check`  
-**Purpose**: Check if a tool call is allowed by policy
+The SDK detects the environment from the key prefix and sets the base URL automatically.
 
-**Request Body**:
+---
+
+## Endpoints
+
+### POST /policy/check
+
+Check whether a tool call is allowed. Called by `guard_tool()` before executing the wrapped function.
+
+**Request**
+
 ```json
 {
-  "tool_name": "string",           // Required: Name of the tool being called
-  "args": ["any"],                 // Optional: Positional arguments (default: [])
-  "kwargs": {"key": "value"},      // Optional: Keyword arguments (default: {})
-  "metadata": {"optional": "data"}, // Optional: Additional metadata
-  "webhook_url": "string"          // Optional: Webhook URL for webhook mode
+  "tool_name": "stripe.issue_refund",
+  "args": [],
+  "kwargs": { "amount": 150.0, "customer_id": "cus_abc" }
 }
 ```
 
-**Response**:
+| Field | Type | Description |
+|-------|------|-------------|
+| `tool_name` | string | Required. The name passed to `guard_tool()`. |
+| `args` | array | Positional arguments (usually empty — all args are bound by name). |
+| `kwargs` | object | Named arguments from the function call. |
+
+**Response**
+
 ```json
 {
-  "decision": "allow|requires_approval|block", // Required: Policy decision
-  "action_id": "string|null",                  // Required for requires_approval
-  "message": "string|null"                     // Optional: Human-readable message
+  "decision": "allow",
+  "action_id": "a1b2c3d4-...",
+  "reason": "no_policy_configured",
+  "status": "completed",
+  "environment": "live",
+  "user_id": "user_abc"
 }
 ```
 
-**Status Codes**:
-- `200`: Policy check successful
-- `400`: Invalid request format
-- `401`: Invalid API key
-- `403`: API key lacks permissions
-- `500`: Internal server error
+| Field | Description |
+|-------|-------------|
+| `decision` | `"allow"`, `"block"`, or `"requires_approval"` |
+| `action_id` | UUID of the logged action record (present for all decisions) |
+| `reason` | `"no_policy_configured"` when the tool passed through because no matching policy exists |
+| `status` | `"completed"` or `"pending"` (pending only when `requires_approval`) |
+| `environment` | `"live"` or `"test"` |
 
-### 2. Action Status
-**Endpoint**: `GET /status/{action_id}`  
-**Purpose**: Get current status of an action
+**SDK behaviour by decision:**
 
-**Path Parameters**:
-- `action_id`: String identifier for the action
+| Decision | What the SDK does |
+|----------|------------------|
+| `allow` | Executes the original function and returns its result |
+| `block` | Raises `PolicyDeniedError` immediately |
+| `requires_approval` | Polls `GET /status/{action_id}` (wait/async modes) or registers webhook callbacks (webhook mode) |
 
-**Response**:
+---
+
+### GET /status/{action_id}
+
+Poll for approval status. Called by the SDK in `wait` and `async` modes.
+
+**Response**
+
 ```json
 {
-  "action_id": "string",                    // Action identifier
-  "status": "pending|approved|denied",     // Current status
-  "message": "string|null",                // Optional status message
-  "created_at": "2024-03-11T16:30:00Z"    // ISO8601 timestamp
+  "action_id": "a1b2c3d4-...",
+  "status": "pending",
+  "message": null,
+  "created_at": "2026-04-14T12:00:00+00:00"
 }
 ```
 
-**Status Codes**:
-- `200`: Status retrieved successfully
-- `401`: Invalid API key
-- `404`: Action not found
-- `500`: Internal server error
+| `status` value | Meaning |
+|----------------|---------|
+| `pending` | Waiting for a human to act on the dashboard |
+| `approved` | Human approved — SDK executes the function |
+| `denied` | Human denied — SDK raises `PolicyDeniedError` |
 
-### 3. Approve Action
-**Endpoint**: `POST /approve/{action_id}`  
-**Purpose**: Approve a pending action
+The SDK polls this endpoint every `poll_interval` seconds (default 2s) up to `max_poll_time` seconds (default 300s), then raises `ApprovalTimeoutError`.
 
-**Path Parameters**:
-- `action_id`: String identifier for the action
+---
 
-**Request Body**:
+## Webhook flow (approval_mode="webhook")
+
+When `approval_mode="webhook"`, the SDK does **not** poll. Instead:
+
+1. SDK calls `POST /policy/check` → receives `requires_approval` + `action_id`
+2. SDK returns a `PendingApproval` object to the caller immediately
+3. When an admin approves or denies on the dashboard, the Arden backend POSTs to your webhook endpoint
+4. Your server calls `arden.handle_webhook(body, headers, signing_key=...)` which dispatches to your `on_approval` or `on_denial` callback
+
+**Webhook POST payload (sent by Arden to your endpoint)**
+
 ```json
 {
-  "message": "string|null" // Optional approval message
-}
-```
-
-**Response**: Empty body with status code
-
-**Status Codes**:
-- `200`: Action approved successfully
-- `400`: Action cannot be approved (wrong status)
-- `401`: Invalid API key
-- `403`: Insufficient permissions
-- `404`: Action not found
-- `500`: Internal server error
-
-### 4. Deny Action
-**Endpoint**: `POST /deny/{action_id}`  
-**Purpose**: Deny a pending action
-
-**Path Parameters**:
-- `action_id`: String identifier for the action
-
-**Request Body**:
-```json
-{
-  "message": "string|null" // Optional denial message
-}
-```
-
-**Response**: Empty body with status code
-
-**Status Codes**:
-- `200`: Action denied successfully
-- `400`: Action cannot be denied (wrong status)
-- `401`: Invalid API key
-- `403`: Insufficient permissions
-- `404`: Action not found
-- `500`: Internal server error
-
-## Webhook Support
-
-### Webhook Registration
-When a tool call is made with `approval_mode="webhook"`, the SDK includes a `webhook_url` in the `/check` request. The backend should:
-
-1. Store the webhook URL with the action
-2. When the action is approved/denied, send a POST request to the webhook URL
-
-### Webhook Payload
-When an action is approved or denied, the backend sends:
-
-**Endpoint**: `POST {webhook_url}`  
-**Headers**:
-```
-Content-Type: application/json
-User-Agent: Arden-Backend/1.0
-X-Arden-Signature: {hmac_signature}  // Optional: for webhook verification
-```
-
-**Payload**:
-```json
-{
-  "action_id": "string",                    // Action identifier
-  "status": "approved|denied",             // Final status
-  "message": "string|null",                // Optional message
-  "tool_name": "string",                   // Original tool name
-  "timestamp": "2024-03-11T16:30:00Z",    // Decision timestamp
-  "args": ["any"],                         // Original arguments
-  "kwargs": {"key": "value"},              // Original keyword arguments
-  "metadata": {"optional": "data"}         // Original metadata
-}
-```
-
-### Webhook Response
-The webhook endpoint should respond with:
-- `200 OK`: Webhook processed successfully
-- `4xx/5xx`: Error processing webhook (backend may retry)
-
-## Error Response Format
-
-All error responses should follow this format:
-```json
-{
-  "error": {
-    "code": "string",        // Error code (e.g., "invalid_request")
-    "message": "string",     // Human-readable error message
-    "details": "object|null" // Optional additional error details
+  "event_type": "action_approved",
+  "action": {
+    "action_id": "a1b2c3d4-...",
+    "tool_name": "stripe.issue_refund",
+    "agent_id": "agent_xyz",
+    "context": { "amount": 150.0, "customer_id": "cus_abc" },
+    "created_at": "2026-04-14T12:00:00+00:00",
+    "environment": "live"
+  },
+  "approval": {
+    "admin_user_id": "user_admin",
+    "notes": "Verified with customer"
   }
 }
 ```
 
-## SDK Approval Mode Behaviors
+**Webhook headers**
 
-### Wait Mode (Default)
-1. SDK calls `POST /check`
-2. If `requires_approval`, SDK polls `GET /status/{action_id}` every 2 seconds
-3. When status changes to `approved`/`denied`, SDK proceeds accordingly
-
-### Async Mode
-1. SDK calls `POST /check`
-2. If `requires_approval`, SDK starts background thread to poll `GET /status/{action_id}`
-3. When status changes, SDK calls appropriate callback function
-4. Original function call returns `None` immediately
-
-### Webhook Mode
-1. SDK calls `POST /check` with `webhook_url`
-2. If `requires_approval`, SDK returns `None` immediately
-3. Backend stores webhook URL and sends notification when action is decided
-4. User's webhook handler processes the notification and executes/handles the function
-
-## Implementation Notes
-
-### API Key Format
-- Test keys: Start with `test_` (e.g., `test_12345_abc...`)
-- Live keys: Any other format (e.g., `live_67890_xyz...`)
-
-### Action ID Format
-- Should be unique, URL-safe strings
-- Recommended: UUIDs or similar (e.g., `act_1234567890abcdef`)
-
-### Timestamps
-- Use ISO8601 format with UTC timezone
-- Example: `2024-03-11T16:30:00Z`
-
-### Rate Limiting
-- Recommended: 100 requests per minute per API key
-- Return `429 Too Many Requests` when exceeded
-
-### Webhook Security
-- Include `X-Arden-Signature` header with HMAC signature for verification
-- Use HTTPS for webhook URLs
-- Implement webhook retry logic with exponential backoff
-
-### CORS Headers
-If supporting web clients, include:
 ```
-Access-Control-Allow-Origin: *
-Access-Control-Allow-Methods: GET, POST, OPTIONS
-Access-Control-Allow-Headers: Authorization, Content-Type
+X-Arden-Timestamp: 1713096000
+X-Arden-Signature: sha256=<hmac_hex>
 ```
 
-## AWS API Gateway Implementation
+The signature is `HMAC-SHA256(signing_key, "{timestamp}.{raw_body}")`. Verify it with `arden.verify_webhook_signature()` or pass `signing_key` to `arden.handle_webhook()`.
 
-### Lambda Function Structure
-```
-/check          -> PolicyCheckFunction
-/status/{id}    -> ActionStatusFunction  
-/approve/{id}   -> ApproveActionFunction
-/deny/{id}      -> DenyActionFunction
-```
+`event_type` is `"action_approved"` or `"action_denied"`.
 
-### Required AWS Services
-- **API Gateway**: REST API endpoints
-- **Lambda**: Business logic functions
-- **DynamoDB**: Store actions, policies, and webhook URLs
-- **SQS**: Queue webhook notifications (optional)
-- **IAM**: API key authentication
-- **CloudWatch**: Logging and monitoring
+---
 
-### Database Schema (DynamoDB)
+## Error responses
 
-**Actions Table**:
-```
-action_id (PK): String
-status: String (pending|approved|denied)
-tool_name: String
-args: List
-kwargs: Map
-metadata: Map
-webhook_url: String (optional)
-created_at: String
-updated_at: String
-message: String (optional)
-api_key: String (for authorization)
+```json
+{ "error": "Tool call requires agent-specific API key" }
 ```
 
-**Policies Table**:
-```
-tool_name (PK): String
-decision: String (allow|requires_approval|block)
-conditions: Map (optional)
-created_at: String
-api_key (GSI): String (for user-specific policies)
-```
+| Status code | Meaning |
+|-------------|---------|
+| 400 | Malformed request (missing `tool_name`, invalid JSON) |
+| 403 | API key valid but missing agent association |
+| 500 | Internal server error |
 
-**API Keys Table**:
-```
-api_key (PK): String
-user_id: String
-environment: String (test|live)
-permissions: List
-created_at: String
-last_used: String
-```
-
-### Webhook Implementation
-```python
-# Lambda function for sending webhooks
-import json
-import boto3
-import requests
-from datetime import datetime
-
-def send_webhook(action_id, status, message=None):
-    # Get action details from DynamoDB
-    action = get_action_from_db(action_id)
-    
-    if not action.get('webhook_url'):
-        return  # No webhook configured
-    
-    payload = {
-        "action_id": action_id,
-        "status": status,
-        "message": message,
-        "tool_name": action['tool_name'],
-        "timestamp": datetime.utcnow().isoformat() + 'Z',
-        "args": action['args'],
-        "kwargs": action['kwargs'],
-        "metadata": action.get('metadata', {})
-    }
-    
-    try:
-        response = requests.post(
-            action['webhook_url'],
-            json=payload,
-            headers={
-                'Content-Type': 'application/json',
-                'User-Agent': 'Arden-Backend/1.0'
-            },
-            timeout=30
-        )
-        response.raise_for_status()
-        
-    except Exception as e:
-        # Log error and potentially retry
-        print(f"Webhook failed for {action_id}: {e}")
-        # Could add to SQS for retry
-```
-
-### Example Policy Check Lambda
-```python
-import json
-import boto3
-from datetime import datetime
-import uuid
-
-def lambda_handler(event, context):
-    try:
-        # Parse request
-        body = json.loads(event['body'])
-        tool_name = body['tool_name']
-        args = body.get('args', [])
-        kwargs = body.get('kwargs', {})
-        metadata = body.get('metadata', {})
-        webhook_url = body.get('webhook_url')
-        
-        # Get API key from headers
-        api_key = event['headers'].get('Authorization', '').replace('Bearer ', '')
-        
-        # Validate API key
-        if not validate_api_key(api_key):
-            return {
-                'statusCode': 401,
-                'body': json.dumps({'error': {'code': 'invalid_api_key', 'message': 'Invalid API key'}})
-            }
-        
-        # Check policy
-        policy_decision = check_policy(tool_name, api_key)
-        
-        if policy_decision == 'allow':
-            return {
-                'statusCode': 200,
-                'body': json.dumps({
-                    'decision': 'allow',
-                    'action_id': None,
-                    'message': 'Tool call allowed by policy'
-                })
-            }
-        
-        elif policy_decision == 'requires_approval':
-            # Create action record
-            action_id = f"act_{uuid.uuid4().hex}"
-            
-            create_action({
-                'action_id': action_id,
-                'status': 'pending',
-                'tool_name': tool_name,
-                'args': args,
-                'kwargs': kwargs,
-                'metadata': metadata,
-                'webhook_url': webhook_url,
-                'api_key': api_key,
-                'created_at': datetime.utcnow().isoformat()
-            })
-            
-            return {
-                'statusCode': 200,
-                'body': json.dumps({
-                    'decision': 'requires_approval',
-                    'action_id': action_id,
-                    'message': 'Tool call requires approval'
-                })
-            }
-        
-        else:  # block
-            return {
-                'statusCode': 200,
-                'body': json.dumps({
-                    'decision': 'block',
-                    'action_id': None,
-                    'message': 'Tool call blocked by policy'
-                })
-            }
-    
-    except Exception as e:
-        return {
-            'statusCode': 500,
-            'body': json.dumps({'error': {'code': 'internal_error', 'message': str(e)}})
-        }
-```
-
-This specification provides everything needed to implement a complete Arden backend with support for all three approval modes: wait, async, and webhook.
+The SDK raises `ArdenError` for 4xx/5xx responses after `retry_attempts` retries (default 3).
