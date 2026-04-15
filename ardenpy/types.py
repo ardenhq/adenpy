@@ -115,5 +115,12 @@ class PendingApproval:
     action_id: str
     tool_name: str
 
+    def __str__(self) -> str:
+        return (
+            f"This action requires human approval before it can execute. "
+            f"A request has been sent to your administrator. "
+            f"The action will complete once approved. (action_id: {self.action_id})"
+        )
+
     def __repr__(self) -> str:
         return f"PendingApproval(action_id={self.action_id!r}, tool_name={self.tool_name!r})"
