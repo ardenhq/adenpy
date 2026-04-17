@@ -44,7 +44,7 @@ def issue_refund(amount: float, customer_id: str) -> str:
 
 # ── Register with Arden ───────────────────────────────────────────────────────
 
-executor = ArdenToolExecutor(tool_name_prefix="agent", approval_mode="wait")
+executor = ArdenToolExecutor(approval_mode="wait")
 executor.register("web_search",  web_search)
 executor.register("create_file", create_file)
 executor.register("send_email",  send_email)

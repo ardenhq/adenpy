@@ -93,7 +93,6 @@ ardenpy.configure(
     max_poll_time: float | None = None,
     retry_attempts: int | None = None,
     signing_key: str | None = None,
-    tool_name_prefix: str | None = None,
 ) -> ArdenConfig
 ```
 
@@ -111,7 +110,6 @@ Sets the global SDK configuration. Returns the resulting `ArdenConfig` instance.
 | `max_poll_time` | `float` | `300.0` | Maximum total seconds to wait for a human decision before raising `ApprovalTimeoutError`. Applies to `wait` and `async` modes. |
 | `retry_attempts` | `int` | `3` | Number of times to retry a failed HTTP request before raising `ArdenError`. |
 | `signing_key` | `str` | `None` | HMAC-SHA256 signing key for verifying incoming webhook payloads. |
-| `tool_name_prefix` | `str` | `None` | Prefix prepended to tool names in the auto-patch path. For example, `"support"` causes tool names to appear as `"support.search_web"` in the dashboard. If omitted, the framework's raw `tool.name` is used. Has no effect on `guard_tool()` calls, which receive their name explicitly. |
 
 **Returns** — `ArdenConfig`
 
@@ -1245,7 +1243,7 @@ pip install "ardenpy[all]"            # everything
 ```python
 import ardenpy as arden
 
-arden.configure(api_key="arden_live_...", tool_name_prefix="support")
+arden.configure(api_key="arden_live_...")
 # All LangChain / CrewAI tool calls are now intercepted.
 
 # LangChain — use normally
@@ -1255,7 +1253,7 @@ agent = create_react_agent(llm, tools, prompt)
 agent = Agent(role="Support Agent", tools=[RefundTool(), EmailTool()], ...)
 ```
 
-Tool names in the dashboard will be `{tool_name_prefix}.{tool.name}` — e.g. `"support.search_web"`, `"support.issue_refund"`. If `tool_name_prefix` is not set, the raw `tool.name` is used.
+Tool names in the dashboard match each tool's `.name` attribute directly (e.g. `"issue_refund"`). The API key already identifies which agent is making the call, so no prefix is needed.
 
 ---
 
@@ -1270,7 +1268,6 @@ from ardenpy.integrations.langchain import protect_tools
 
 safe_tools = protect_tools(
     raw_tools,
-    tool_name_prefix="support",
     approval_mode="webhook",
     on_approval=my_approval_handler,
     on_denial=my_denial_handler,
@@ -1283,7 +1280,6 @@ safe_tools = protect_tools(
 | `approval_mode` | `str` | `"wait"` | `"wait"`, `"async"`, or `"webhook"` |
 | `on_approval` | callable | `None` | Required for `async`/`webhook` modes |
 | `on_denial` | callable | `None` | Required for `async`/`webhook` modes |
-| `tool_name_prefix` | `str` | `"langchain"` | Prefix for Arden policy names |
 
 **CrewAI**
 
@@ -1292,14 +1288,13 @@ from ardenpy.integrations.crewai import protect_tools
 
 safe_tools = protect_tools(
     [RefundTool(), EmailTool()],
-    tool_name_prefix="stripe",
     approval_mode="async",
     on_approval=handle_approval,
     on_denial=handle_denial,
 )
 ```
 
-Same parameter signature as LangChain. Default prefix is `"crewai"`.
+Same parameter signature as LangChain.
 
 ---
 
@@ -1318,14 +1313,14 @@ executor = AgentExecutor(agent=agent, tools=tools, callbacks=[ArdenCallbackHandl
 
 ### OpenAI Chat Completions — `ArdenToolExecutor`
 
-**`ArdenToolExecutor(approval_mode="wait", on_approval=None, on_denial=None, tool_name_prefix="openai")`**
+**`ArdenToolExecutor(approval_mode="wait", on_approval=None, on_denial=None)`**
 
 Dispatch table for the OpenAI Chat Completions tool-call loop. Register all functions once; Arden checks policy on each `run()` call.
 
 ```python
 from ardenpy.integrations.openai import ArdenToolExecutor
 
-executor = ArdenToolExecutor(tool_name_prefix="stripe")
+executor = ArdenToolExecutor()
 executor.register("issue_refund", issue_refund)
 executor.register("send_email",   send_email)
 
@@ -1333,7 +1328,7 @@ executor.register("send_email",   send_email)
 result = executor.run(tc.function.name, json.loads(tc.function.arguments))
 ```
 
-**`executor.register(name, func, arden_name=None)`** — Register a function. `arden_name` overrides the default `{prefix}.{name}` if you need a custom policy path.
+**`executor.register(name, func, arden_name=None)`** — Register a function. `arden_name` overrides the tool name used for policy lookup if you need a custom name.
 
 **`executor.run(name, arguments)`** — Execute a registered tool. Raises `PolicyDeniedError` if blocked. Raises `KeyError` if `name` was not registered.
 
@@ -1341,7 +1336,7 @@ result = executor.run(tc.function.name, json.loads(tc.function.arguments))
 
 ### OpenAI Agents SDK — `protect_function_tools()`
 
-**`protect_function_tools(tools, approval_mode="wait", on_approval=None, on_denial=None, tool_name_prefix="openai")`**
+**`protect_function_tools(tools, approval_mode="wait", on_approval=None, on_denial=None)`**
 
 Wraps the underlying callable on `FunctionTool` objects (created with `@function_tool`). Returns the same list.
 
@@ -1352,9 +1347,37 @@ from ardenpy.integrations.openai import protect_function_tools
 @function_tool
 def delete_user(user_id: str) -> str: ...
 
-safe_tools = protect_function_tools([delete_user], tool_name_prefix="admin")
+safe_tools = protect_function_tools([delete_user])
 agent = Agent(name="AdminBot", tools=safe_tools)
 ```
+
+---
+
+## Session Tracking
+
+Attach a session ID to group all tool calls from a single conversation in the action log. Useful for debugging, auditing, and session replay on the dashboard.
+
+```python
+import ardenpy as arden
+import uuid
+
+arden.configure(api_key="arden_live_...")
+
+# Set once per request / conversation turn
+arden.set_session(str(uuid.uuid4()))
+
+# Every guard_tool and auto-patched call in this context now carries the session ID.
+# Call clear_session() when done (optional — cleaned up automatically at task end).
+arden.clear_session()
+```
+
+Implemented with `contextvars.ContextVar` — safe for concurrent async requests with no locking needed. Session tracking is completely optional; existing code is unaffected when `set_session()` is never called.
+
+| Function | Description |
+|----------|-------------|
+| `arden.set_session(session_id: str)` | Attach a session ID to the current async task or thread |
+| `arden.get_session() -> str \| None` | Read the current session ID |
+| `arden.clear_session()` | Remove the session ID from the current context |
 
 ---
 

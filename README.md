@@ -29,10 +29,10 @@ For **LangChain and CrewAI** — that's it. Arden auto-patches the framework at 
 
 ```python
 # LangChain — use tools normally, Arden intercepts everything
-arden.configure(api_key="arden_live_...", tool_name_prefix="support")
+arden.configure(api_key="arden_live_...")
 
 agent = create_react_agent(llm, tools, prompt)  # no wrapping needed
-# Tool names in the dashboard: "support.search_web", "support.send_email", etc.
+# Tool names in the dashboard match each tool's .name attribute directly
 ```
 
 For **custom agents with no framework**, wrap functions explicitly:
@@ -120,7 +120,7 @@ If you need per-tool approval mode overrides, `protect_tools()` is still availab
 ```python
 from ardenpy.integrations.openai import ArdenToolExecutor
 
-executor = ArdenToolExecutor(tool_name_prefix="support")
+executor = ArdenToolExecutor()
 executor.register("issue_refund", issue_refund_fn)
 executor.register("send_email",   send_email_fn)
 
@@ -133,7 +133,7 @@ result = executor.run(tc.function.name, json.loads(tc.function.arguments))
 ```python
 from ardenpy.integrations.openai import protect_function_tools
 
-safe_tools = protect_function_tools([issue_refund, search], tool_name_prefix="support")
+safe_tools = protect_function_tools([issue_refund, search])
 agent = Agent(name="SupportBot", tools=safe_tools)
 ```
 
@@ -142,6 +142,24 @@ pip install "ardenpy[openai-agents]"
 ```
 
 See [examples/](examples/README.md) for runnable code for every integration.
+
+---
+
+## Session tracking
+
+Attach a session ID to group all tool calls from a single conversation in the action log:
+
+```python
+import ardenpy as arden
+import uuid
+
+arden.configure(api_key="arden_live_...")
+
+# Set once per request — all guard_tool and auto-patched calls carry it automatically
+arden.set_session(str(uuid.uuid4()))
+```
+
+Uses `contextvars.ContextVar` — safe for concurrent async requests. Fully optional.
 
 ---
 
