@@ -147,3 +147,24 @@ No. `configure()` must be called before `protect_tools()` (required to initialis
 Every tool call appears in the action log regardless of which tools you explicitly wrap.
 
 **Do not mix auto-patching with `protect_tools()` on the same tool** — the policy check would run twice. Tools wrapped explicitly are automatically skipped by the auto-patcher via the `_arden_guarded` sentinel.
+
+## Session tracking
+
+Attach a session ID to group all tool calls from a single conversation or run in the action log:
+
+```python
+import ardenpy as arden
+import uuid
+
+arden.configure(api_key="arden_live_...")
+
+# Set once per request / conversation — picked up by all guard_tool and
+# auto-patched tool calls in the current async task or thread.
+arden.set_session(str(uuid.uuid4()))
+
+# Clear when done (optional — collected automatically at task end)
+arden.clear_session()
+```
+
+`set_session()` uses `contextvars.ContextVar`, so concurrent async requests
+never share a session ID. Omitting it entirely has no effect — fully optional.
