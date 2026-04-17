@@ -7,6 +7,7 @@ and human approval workflows.
 
 from .guard import guard_tool, handle_webhook, verify_webhook_signature, with_guard, GuardContext
 from .config import configure, get_config, is_configured, configure_test, configure_live, ArdenConfig
+from .session import set_session, get_session, clear_session
 from .client import ArdenClient
 from .types import (
     ActionStatus,
@@ -30,6 +31,10 @@ __all__ = [
     "handle_webhook",
     "verify_webhook_signature",
     "configure",
+    # Session tracking (optional)
+    "set_session",
+    "get_session",
+    "clear_session",
     "configure_test",
     "configure_live",
     "get_config",

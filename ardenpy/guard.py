@@ -156,6 +156,10 @@ def _run_with_policy_check(
         on_approval: Callback for async/webhook modes.
         on_denial: Callback for async/webhook modes.
     """
+    from .session import get_session
+    session_id = get_session()
+    metadata = {"session_id": session_id} if session_id else None
+
     client = ArdenClient()
     try:
         logger.debug(f"Checking policy for tool '{tool_name}'")
@@ -163,6 +167,7 @@ def _run_with_policy_check(
             tool_name=tool_name,
             args=[],
             kwargs=context,
+            metadata=metadata,
         )
 
         if response.decision == PolicyDecision.ALLOW:
