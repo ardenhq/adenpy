@@ -18,7 +18,7 @@ Let Claude Code integrate Arden into your project automatically — it detects y
 # Add the skill to your project
 mkdir -p .claude/commands
 curl -o .claude/commands/arden-setup.md \
-  https://raw.githubusercontent.com/arden/ardenpy/main/skills/arden-setup.md
+  https://raw.githubusercontent.com/ardenhq/adenpy/main/skills/arden-setup.md
 ```
 
 Then in Claude Code, run:
