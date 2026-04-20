@@ -4,10 +4,10 @@ Called automatically by configure(). Patches the base-class invocation method
 of each detected framework so that every tool call goes through Arden's policy
 engine without any explicit wrapping by the user.
 
-Frameworks patched at the class level (applies to all instances, including ones
-created before configure() was called):
-- LangChain: BaseTool.run
-- CrewAI:    BaseTool.run
+Frameworks patched:
+- LangChain:         BaseTool.run          (class-level)
+- CrewAI:            BaseTool.run          (class-level)
+- OpenAI Agents SDK: FunctionTool.__init__ (wraps on_invoke_tool per instance)
 
 Tools that were explicitly wrapped with protect_tools() carry an
 ``_arden_guarded`` sentinel attribute; the auto-patch skips those to avoid
@@ -43,6 +43,8 @@ def patch_all() -> list[str]:
         newly_patched.append("langchain")
     if _try_patch_crewai():
         newly_patched.append("crewai")
+    if _try_patch_openai_agents():
+        newly_patched.append("openai-agents")
     return newly_patched
 
 
@@ -140,4 +142,96 @@ def _try_patch_crewai() -> bool:
     setattr(BaseTool, _CLASS_PATCHED, True)
     _patched.add("crewai")
     logger.debug("Arden: auto-patched CrewAI BaseTool.run")
+    return True
+
+
+# ── OpenAI Agents SDK ─────────────────────────────────────────────────────────
+
+def _try_patch_openai_agents() -> bool:
+    if "openai-agents" in _patched:
+        return False
+
+    try:
+        from agents.tool import FunctionTool
+    except ImportError:
+        try:
+            from agents import FunctionTool  # type: ignore[no-redef]
+        except ImportError:
+            return False
+
+    if getattr(FunctionTool, _CLASS_PATCHED, False):
+        _patched.add("openai-agents")
+        return False
+
+    _orig_init = FunctionTool.__init__
+
+    @functools.wraps(_orig_init)
+    def _patched_init(self, *args, **kwargs):
+        _orig_init(self, *args, **kwargs)
+
+        # Skip instances explicitly wrapped with protect_function_tools()
+        if getattr(self, ARDEN_GUARDED, False):
+            return
+
+        _orig_on_invoke = self.on_invoke_tool
+        tool_name = self.name
+
+        async def _guarded_on_invoke(ctx, input_str):
+            import json as _json
+            try:
+                tool_args = _json.loads(input_str) if input_str else {}
+            except Exception:
+                tool_args = {"input": str(input_str)}
+
+            from .guard import _make_serializable
+            from .session import get_session
+            from .client import ArdenClient
+            from .types import PolicyDecision, PolicyDeniedError, ArdenError
+
+            session_id = get_session()
+            metadata = {"session_id": session_id} if session_id else None
+            context = _make_serializable(tool_args)
+
+            client = ArdenClient()
+            try:
+                response = client.check_tool_call(
+                    tool_name=tool_name,
+                    args=[],
+                    kwargs=context,
+                    metadata=metadata,
+                )
+
+                if response.decision == PolicyDecision.ALLOW:
+                    return await _orig_on_invoke(ctx, input_str)
+
+                elif response.decision == PolicyDecision.BLOCK:
+                    raise PolicyDeniedError(
+                        response.message or f"Tool '{tool_name}' is blocked by policy",
+                        tool_name=tool_name,
+                    )
+
+                elif response.decision == PolicyDecision.REQUIRE_APPROVAL:
+                    if not response.action_id:
+                        raise ArdenError("Policy requires approval but no action_id provided")
+                    status = client.wait_for_approval(response.action_id)
+                    if status.status.value == "approved":
+                        return await _orig_on_invoke(ctx, input_str)
+                    else:
+                        raise PolicyDeniedError(
+                            f"Tool call was denied: {status.message or 'No reason provided'}",
+                            tool_name=tool_name,
+                        )
+
+                else:
+                    raise ArdenError(f"Unknown policy decision: {response.decision}")
+
+            finally:
+                client.close()
+
+        self.on_invoke_tool = _guarded_on_invoke
+
+    FunctionTool.__init__ = _patched_init
+    setattr(FunctionTool, _CLASS_PATCHED, True)
+    _patched.add("openai-agents")
+    logger.debug("Arden: auto-patched OpenAI Agents SDK FunctionTool.__init__")
     return True
