@@ -10,6 +10,22 @@ Arden sits between your agent and its tools. Every call is checked against polic
 pip install ardenpy
 ```
 
+## Claude Code skill
+
+Let Claude Code integrate Arden into your project automatically — it detects your framework, adds the dependency, inserts `configure()`, and optionally sets up session tracking:
+
+```bash
+# Add the skill to your project
+mkdir -p .claude/commands
+curl -o .claude/commands/arden-setup.md \
+  https://raw.githubusercontent.com/arden/ardenpy/main/skills/arden-setup.md
+```
+
+Then in Claude Code, run:
+```
+/arden-setup
+```
+
 ## Quick start
 
 **1. Get your API key** from [app.arden.sh](https://app.arden.sh). You'll get two keys:
