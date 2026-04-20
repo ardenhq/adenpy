@@ -119,8 +119,8 @@ Sets the global SDK configuration. Returns the resulting `ArdenConfig` instance.
 **Notes**
 
 - `configure()` must be called before any `guard_tool()` call.
-- `configure()` automatically detects and patches installed AI frameworks (LangChain, CrewAI). After it returns, all tool instances from those frameworks have their calls intercepted — no explicit wrapping is needed. See [Framework Integrations](#framework-integrations).
-- Calling `configure()` a second time overwrites the previous configuration globally and updates the auto-patch prefix immediately.
+- `configure()` automatically detects and patches installed AI frameworks (LangChain, CrewAI, OpenAI Agents SDK). After it returns, all tool calls from those frameworks are intercepted, enforced, and logged — no explicit wrapping is needed. See [Framework Integrations](#framework-integrations).
+- Calling `configure()` a second time overwrites the previous configuration globally.
 - The `api_key` can also be set via the `ARDEN_API_KEY` environment variable. If both are provided, the explicit parameter takes precedence.
 
 **Example**

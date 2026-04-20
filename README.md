@@ -41,14 +41,14 @@ arden.configure(api_key="arden_live_...")
 
 **3. Call your tools**
 
-For **LangChain and CrewAI** — that's it. Arden auto-patches the framework at configure-time, so every tool call is intercepted without any wrapping:
+For **LangChain, CrewAI, and OpenAI Agents SDK** — that's it. Arden auto-patches all three frameworks at configure-time, so every tool call is intercepted without any wrapping:
 
 ```python
-# LangChain — use tools normally, Arden intercepts everything
+# LangChain, CrewAI, or OpenAI Agents SDK — use tools normally
 arden.configure(api_key="arden_live_...")
 
 agent = create_react_agent(llm, tools, prompt)  # no wrapping needed
-# Tool names in the dashboard match each tool's .name attribute directly
+# Every tool call is now enforced and logged automatically
 ```
 
 For **custom agents with no framework**, wrap functions explicitly:
@@ -108,30 +108,35 @@ For webhook setup (FastAPI, Flask, Django examples) see the [Library Reference](
 
 ## Framework integrations
 
-### LangChain and CrewAI — zero wrapping required
+### LangChain, CrewAI, and OpenAI Agents SDK — zero wrapping required
 
-Arden automatically patches LangChain and CrewAI's base tool class when `configure()` is called. Every tool instance — including ones created after configure — has its calls intercepted.
+Arden automatically patches all three frameworks when `configure()` is called. Every tool call in the process is intercepted — including tools created after configure is called.
 
 ```python
 import ardenpy as arden
 
 arden.configure(api_key="arden_live_...")
-# All LangChain / CrewAI tool calls in this process are now intercepted.
+# All tool calls are now intercepted, enforced, and logged.
 # No protect_tools(), no guard_tool(), no boilerplate.
 ```
 
-Tool names in the dashboard match each tool's `.name` attribute directly (e.g. `"issue_refund"`). The API key already scopes calls to your agent, so no prefix is needed.
+| Framework | What gets patched |
+|-----------|------------------|
+| LangChain | `BaseTool.run` at the class level |
+| CrewAI | `BaseTool.run` at the class level |
+| OpenAI Agents SDK | `FunctionTool.__init__` — wraps `on_invoke_tool` per instance |
 
-Install the optional framework dependencies if you don't already have them:
+Tool names in the dashboard match each tool's `.name` attribute. Install optional extras if you don't already have the framework:
 
 ```bash
-pip install "ardenpy[langchain]"     # LangChain
-pip install "ardenpy[crewai]"        # CrewAI
+pip install "ardenpy[langchain]"       # LangChain
+pip install "ardenpy[crewai]"          # CrewAI
+pip install "ardenpy[openai-agents]"   # OpenAI Agents SDK
 ```
 
-If you need per-tool approval mode overrides, `protect_tools()` is still available — see the [Library Reference](LIBRARY_REFERENCE.md#framework-integrations).
+### OpenAI Chat Completions (raw loop)
 
-### OpenAI Chat Completions
+The Chat Completions API has no patchable base class. Use `ArdenToolExecutor` to register and dispatch tool calls:
 
 ```python
 from ardenpy.integrations.openai import ArdenToolExecutor
@@ -140,21 +145,8 @@ executor = ArdenToolExecutor()
 executor.register("issue_refund", issue_refund_fn)
 executor.register("send_email",   send_email_fn)
 
-# In your loop:
+# In your tool-call loop:
 result = executor.run(tc.function.name, json.loads(tc.function.arguments))
-```
-
-### OpenAI Agents SDK
-
-```python
-from ardenpy.integrations.openai import protect_function_tools
-
-safe_tools = protect_function_tools([issue_refund, search])
-agent = Agent(name="SupportBot", tools=safe_tools)
-```
-
-```bash
-pip install "ardenpy[openai-agents]"
 ```
 
 See [examples/](examples/README.md) for runnable code for every integration.
