@@ -70,7 +70,7 @@ python autogpt_integration.py
 LangChain `AgentExecutor` with Arden auto-patching. Call `configure()` once and every tool in the process is intercepted — no `protect_tools()` required. All tool calls are logged.
 
 ```bash
-pip install "ardenpy[langchain]" langchain-community langchain-openai
+pip install ardenpy langchain-community langchain-openai
 python langchain_integration.py
 ```
 
@@ -80,7 +80,7 @@ python langchain_integration.py
 Same agent but using explicit `protect_tools()` to set a different approval mode (`webhook`) on a specific tool. All other tools are still auto-patched and logged. Use this only when you need per-tool approval mode overrides — `langchain_integration.py` covers the common case.
 
 ```bash
-pip install "ardenpy[langchain]" langchain-community langchain-openai
+pip install ardenpy langchain-community langchain-openai
 python langchain_protect_tools.py
 ```
 
@@ -90,7 +90,7 @@ python langchain_protect_tools.py
 CrewAI agent with Arden auto-patching. Call `configure()` once and every `BaseTool._run()` call in the process is intercepted — define plain subclasses as usual. All tool calls are logged.
 
 ```bash
-pip install "ardenpy[crewai]" crewai
+pip install ardenpy crewai
 python crewai_integration.py
 ```
 
@@ -100,7 +100,7 @@ python crewai_integration.py
 Same agent but using explicit `protect_tools()` to set a different approval mode (`webhook`) on a specific tool. All other tools are still auto-patched and logged. Use this only when you need per-tool approval mode overrides — `crewai_integration.py` covers the common case.
 
 ```bash
-pip install "ardenpy[crewai]" crewai
+pip install ardenpy crewai
 python crewai_protect_tools.py
 ```
 

@@ -6,7 +6,7 @@ required. Every tool call in the process is intercepted without modifying how yo
 build the agent.
 
 Requirements:
-    pip install "ardenpy[langchain]" langchain-community langchain-openai
+    pip install ardenpy langchain-community langchain-openai
 
 Setup:
     export OPENAI_API_KEY="sk-..."

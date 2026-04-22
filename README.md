@@ -126,12 +126,12 @@ arden.configure(api_key="arden_live_...")
 | CrewAI | `BaseTool.run` at the class level |
 | OpenAI Agents SDK | `FunctionTool.__init__` — wraps `on_invoke_tool` per instance |
 
-Tool names in the dashboard match each tool's `.name` attribute. Install optional extras if you don't already have the framework:
+Tool names in the dashboard match each tool's `.name` attribute. If you don't already have the framework installed, install it alongside ardenpy:
 
 ```bash
-pip install "ardenpy[langchain]"       # LangChain
-pip install "ardenpy[crewai]"          # CrewAI
-pip install "ardenpy[openai-agents]"   # OpenAI Agents SDK
+pip install ardenpy langchain-core                   # LangChain
+pip install ardenpy crewai                           # CrewAI
+pip install ardenpy openai-agents                    # OpenAI Agents SDK
 ```
 
 ### OpenAI Chat Completions (raw loop)

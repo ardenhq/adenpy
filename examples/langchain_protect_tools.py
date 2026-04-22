@@ -11,7 +11,7 @@ class level, so any tool NOT in your protect_tools() list is still
 intercepted by the auto-patcher and recorded in the action log.
 
 Requirements:
-    pip install "ardenpy[langchain]" langchain-community langchain-openai
+    pip install ardenpy langchain-community langchain-openai
 
 Setup:
     export OPENAI_API_KEY="sk-..."

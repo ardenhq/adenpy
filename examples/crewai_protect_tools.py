@@ -11,7 +11,7 @@ level, so any tool NOT in your protect_tools() list is still intercepted
 by the auto-patcher and recorded in the action log.
 
 Requirements:
-    pip install "ardenpy[crewai]" crewai
+    pip install ardenpy crewai
 
 Setup:
     export OPENAI_API_KEY="sk-..."

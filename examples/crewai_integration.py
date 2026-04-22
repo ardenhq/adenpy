@@ -6,7 +6,7 @@ required. Define plain BaseTool subclasses as usual and pass them directly to
 your agent. Every _run() call is intercepted automatically.
 
 Requirements:
-    pip install "ardenpy[crewai]" crewai
+    pip install ardenpy crewai
 
 Setup:
     export OPENAI_API_KEY="sk-..."

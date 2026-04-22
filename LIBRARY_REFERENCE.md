@@ -1225,13 +1225,12 @@ Pass all your tools through Arden — you don't need to decide upfront which one
 | OpenAI Agents SDK | `protect_function_tools()` |
 | Custom / no framework | `guard_tool()` |
 
-Install optional framework dependencies as needed:
+If you don't already have the framework installed, install it alongside ardenpy:
 
 ```bash
-pip install "ardenpy[langchain]"      # LangChain
-pip install "ardenpy[crewai]"         # CrewAI
-pip install "ardenpy[openai-agents]"  # OpenAI Agents SDK
-pip install "ardenpy[all]"            # everything
+pip install ardenpy langchain-core       # LangChain
+pip install ardenpy crewai               # CrewAI
+pip install ardenpy openai-agents        # OpenAI Agents SDK
 ```
 
 ---
