@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ardenpy"
-version = "0.5.1"
+version = "0.5.2"
 description = "Runtime policy enforcement, human approval, and observability for AI agent tool calls"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "Arden Team", email = "team@arden.dev"}
+    {name = "Arden Dev", email = "dev@arden.sh"}
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
