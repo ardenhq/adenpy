@@ -131,22 +131,12 @@ python approval_workflows_demo.py
 
 | Situation | API |
 |-----------|-----|
-| LangChain or CrewAI (standard) | `arden.configure(api_key="...")` — auto-patched, all tools logged |
-| LangChain or CrewAI with per-tool approval modes | `protect_tools()` from `ardenpy.integrations.*` for those tools; the rest are still auto-patched |
-| OpenAI Agents SDK | `protect_function_tools()` from `ardenpy.integrations.openai` |
+| LangChain agent | `arden.configure(api_key="...")` — auto-patched, nothing else needed |
+| CrewAI agent | `arden.configure(api_key="...")` — auto-patched, nothing else needed |
+| OpenAI Agents SDK | `arden.configure(api_key="...")` — auto-patched, nothing else needed |
 | OpenAI Chat Completions loop | `ArdenToolExecutor` from `ardenpy.integrations.openai` |
 | Custom agent, no framework | `arden.guard_tool(name, fn)` per tool |
-
-## Does protect_tools() affect logging?
-
-No. `configure()` must be called before `protect_tools()` (required to initialise the SDK), and that call auto-patches the framework's base class. This means:
-
-- Tools **in** `protect_tools()` → handled by `guard_tool()` → logged via policy check ✅
-- Tools **not in** `protect_tools()` → caught by the auto-patcher → also logged ✅
-
-Every tool call appears in the action log regardless of which tools you explicitly wrap.
-
-**Do not mix auto-patching with `protect_tools()` on the same tool** — the policy check would run twice. Tools wrapped explicitly are automatically skipped by the auto-patcher via the `_arden_guarded` sentinel.
+| Webhook or async approval for specific tools | `arden.guard_tool(name, fn, approval_mode="webhook")` — works alongside auto-patching |
 
 ## Session tracking
 

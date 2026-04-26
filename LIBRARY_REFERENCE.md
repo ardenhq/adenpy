@@ -1222,7 +1222,7 @@ Pass all your tools through Arden — you don't need to decide upfront which one
 | LangChain agent | Just `configure()` — auto-patched at startup |
 | CrewAI agent | Just `configure()` — auto-patched at startup |
 | OpenAI Chat Completions loop | `ArdenToolExecutor` |
-| OpenAI Agents SDK | `protect_function_tools()` |
+| OpenAI Agents SDK | Just `configure()` — auto-patched at startup |
 | Custom / no framework | `guard_tool()` |
 
 If you don't already have the framework installed, install it alongside ardenpy:
@@ -1256,44 +1256,43 @@ Tool names in the dashboard match each tool's `.name` attribute directly (e.g. `
 
 ---
 
-### `protect_tools()` — explicit override (optional)
+### Advanced: webhooks and async approval with `guard_tool()`
 
-For cases where you need a specific `approval_mode`, per-call `on_approval`/`on_denial` callbacks, or a different prefix for a subset of tools, use `protect_tools()` explicitly. Tools wrapped with `protect_tools()` are marked internally so the auto-patch skips them — no double-checking.
+By default, all intercepted tool calls use `wait` mode — execution blocks until a human approves or denies. If you need **webhook** or **async** approval for specific tools, wrap them explicitly with `guard_tool()`. Explicitly wrapped tools are skipped by the auto-patcher, so there's no double policy check.
 
-**LangChain**
+This applies to any framework — you can wrap one high-risk tool with webhook mode while the rest of your agent's tools are handled automatically by the auto-patch.
 
 ```python
-from ardenpy.integrations.langchain import protect_tools
+import ardenpy as arden
 
-safe_tools = protect_tools(
-    raw_tools,
+arden.configure(api_key="arden_live_...")
+
+# Webhook mode — Arden POSTs to your endpoint when an admin decides
+safe_refund = arden.guard_tool(
+    "stripe.issue_refund",
+    issue_refund,
     approval_mode="webhook",
-    on_approval=my_approval_handler,
-    on_denial=my_denial_handler,
+    on_approval=handle_approval,
+    on_denial=handle_denial,
 )
-```
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `tools` | `list` | required | LangChain tool instances |
-| `approval_mode` | `str` | `"wait"` | `"wait"`, `"async"`, or `"webhook"` |
-| `on_approval` | callable | `None` | Required for `async`/`webhook` modes |
-| `on_denial` | callable | `None` | Required for `async`/`webhook` modes |
-
-**CrewAI**
-
-```python
-from ardenpy.integrations.crewai import protect_tools
-
-safe_tools = protect_tools(
-    [RefundTool(), EmailTool()],
+# Async mode — returns PendingApproval immediately, polls in background
+safe_delete = arden.guard_tool(
+    "db.delete_user",
+    delete_user,
     approval_mode="async",
     on_approval=handle_approval,
     on_denial=handle_denial,
 )
 ```
 
-Same parameter signature as LangChain.
+| `approval_mode` | Behaviour |
+|----------------|-----------|
+| `"wait"` (default) | Blocks until a human acts, then executes or raises `PolicyDeniedError` |
+| `"async"` | Returns `PendingApproval` immediately; background thread polls and calls your callback |
+| `"webhook"` | Returns `PendingApproval` immediately; Arden POSTs to your registered endpoint when decided |
+
+For webhook endpoint setup (FastAPI, Flask, Django) see [Webhook Integration](#webhook-integration).
 
 ---
 
@@ -1333,22 +1332,24 @@ result = executor.run(tc.function.name, json.loads(tc.function.arguments))
 
 ---
 
-### OpenAI Agents SDK — `protect_function_tools()`
+### OpenAI Agents SDK — auto-patched
 
-**`protect_function_tools(tools, approval_mode="wait", on_approval=None, on_denial=None)`**
-
-Wraps the underlying callable on `FunctionTool` objects (created with `@function_tool`). Returns the same list.
+`configure()` patches `FunctionTool.__init__` so every tool created with `@function_tool` is intercepted automatically — no wrapping needed. Use your tools and agents exactly as you normally would.
 
 ```python
-from agents import function_tool
-from ardenpy.integrations.openai import protect_function_tools
+import ardenpy as arden
+from agents import Agent, function_tool, Runner
+
+arden.configure(api_key="arden_live_...")
 
 @function_tool
 def delete_user(user_id: str) -> str: ...
 
-safe_tools = protect_function_tools([delete_user])
-agent = Agent(name="AdminBot", tools=safe_tools)
+# No wrapping — every tool call is intercepted automatically
+agent = Agent(name="AdminBot", tools=[delete_user])
 ```
+
+For webhook or async approval on specific tools, wrap them with `guard_tool()` as described in the [Advanced approval modes](#advanced-webhooks-and-async-approval-with-guard_tool) section.
 
 ---
 

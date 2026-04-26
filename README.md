@@ -2,6 +2,8 @@
 
 **Policy enforcement and human approval for AI agent tool calls.**
 
+![Arden demo](assets/ArdenGithubDemo.gif)
+
 Arden sits between your agent and its tools. Every call is checked against policies you configure in the dashboard — automatically allowed, blocked, or held for a human to approve.
 
 ## Install
