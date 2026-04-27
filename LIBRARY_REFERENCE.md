@@ -23,7 +23,11 @@ This document is the complete reference for the `ardenpy` SDK. It covers every p
    - [wait (default)](#wait-mode)
    - [async](#async-mode)
    - [webhook](#webhook-mode)
-6. [Webhook Integration](#webhook-integration)
+6. [Token Usage Tracking](#token-usage-tracking)
+   - [log_token_usage()](#log_token_usage)
+   - [ArdenTokenUsageCallback](#ardentokenusagecallback)
+   - [Automatic capture by framework](#automatic-capture-by-framework)
+7. [Webhook Integration](#webhook-integration)
    - [handle_webhook()](#handle_webhook)
    - [verify_webhook_signature()](#verify_webhook_signature)
    - [Webhook Payload Reference](#webhook-payload-reference)
@@ -1350,6 +1354,75 @@ agent = Agent(name="AdminBot", tools=[delete_user])
 ```
 
 For webhook or async approval on specific tools, wrap them with `guard_tool()` as described in the [Advanced approval modes](#advanced-webhooks-and-async-approval-with-guard_tool) section.
+
+---
+
+## Token Usage Tracking
+
+Arden tracks token consumption and estimated cost for every LLM call. For supported frameworks this is fully automatic — `configure()` patches the framework at startup and logs usage in a background thread with no latency impact.
+
+### Automatic capture by framework
+
+| Framework | What is patched | How |
+|-----------|----------------|-----|
+| LangChain | `BaseChatModel.invoke` | Reads `usage_metadata` or `response_metadata` from the returned `AIMessage` |
+| CrewAI | Same as LangChain | CrewAI uses LangChain chat models under the hood |
+| OpenAI Agents SDK | `Runner.run` | Reads `RunResult.usage` after each run |
+| OpenAI Chat Completions | Not patched | Call `log_token_usage()` manually |
+| Any other LLM | Not patched | Call `log_token_usage()` manually |
+
+No extra configuration is needed. Once `configure()` is called, usage records appear in the dashboard under each agent, broken down by model, day, and session.
+
+---
+
+### `log_token_usage()`
+
+**`ardenpy.log_token_usage(model, prompt_tokens, completion_tokens, session_id=None)`**
+
+Log token usage for a single LLM call. Fire-and-forget — runs in a background daemon thread and adds no latency to your agent.
+
+```python
+import ardenpy as arden
+
+arden.configure(api_key="arden_live_...")
+
+# After any LLM call in a custom loop:
+response = openai_client.chat.completions.create(
+    model="gpt-4o",
+    messages=messages,
+)
+arden.log_token_usage(
+    model="gpt-4o",
+    prompt_tokens=response.usage.prompt_tokens,
+    completion_tokens=response.usage.completion_tokens,
+)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `model` | `str` | required | Model name, e.g. `"gpt-4o"`, `"claude-sonnet-4-6"`. Unknown models are logged with `rate_found: false` and zero cost. |
+| `prompt_tokens` | `int` | required | Number of input tokens consumed. |
+| `completion_tokens` | `int` | required | Number of output tokens generated. |
+| `session_id` | `str \| None` | `None` | Session ID to associate this record with. Falls back to the current `set_session()` value if not provided. |
+
+Cost is calculated at write time using published list prices. If the model is not in the pricing table, `total_cost_usd` is recorded as `0` and `rate_found` is `false`. A no-op if `configure()` has not been called.
+
+---
+
+### `ArdenTokenUsageCallback`
+
+LangChain `BaseCallbackHandler` that logs token usage via `on_llm_end`. Injected automatically by `configure()` — you only need this if you have disabled auto-patching or are adding it to a specific chain manually.
+
+```python
+from ardenpy.token_usage import ArdenTokenUsageCallback
+from langchain.agents import AgentExecutor
+
+executor = AgentExecutor(
+    agent=agent,
+    tools=tools,
+    callbacks=[ArdenTokenUsageCallback()],
+)
+```
 
 ---
 

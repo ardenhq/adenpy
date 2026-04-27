@@ -242,6 +242,38 @@ class ArdenClient:
             logger.error(f"Failed to deny action: {e}")
             raise ArdenError(f"Denial failed: {e}")
     
+    def log_token_usage(
+        self,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        session_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Log token usage for an LLM call.
+
+        Args:
+            model:             Model name, e.g. "gpt-4o".
+            prompt_tokens:     Input token count.
+            completion_tokens: Output token count.
+            session_id:        Optional session ID.
+
+        Returns:
+            Response dict with usage_id, total_tokens, total_cost_usd.
+        """
+        payload: Dict[str, Any] = {
+            "model":             model,
+            "prompt_tokens":     prompt_tokens,
+            "completion_tokens": completion_tokens,
+        }
+        if session_id:
+            payload["session_id"] = session_id
+
+        try:
+            return self._make_request(method="POST", endpoint="/token-usage", data=payload)
+        except Exception as e:
+            logger.debug(f"Token usage logging failed (non-fatal): {e}")
+            return {}
+
     def close(self):
         """Close the HTTP client."""
         if self._client:

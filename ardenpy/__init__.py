@@ -9,6 +9,7 @@ from .guard import guard_tool, handle_webhook, verify_webhook_signature, with_gu
 from .config import configure, get_config, is_configured, configure_test, configure_live, ArdenConfig
 from .session import set_session, get_session, clear_session
 from .client import ArdenClient
+from .token_usage import log_token_usage
 from .types import (
     ActionStatus,
     PolicyDecision,
@@ -31,6 +32,9 @@ __all__ = [
     "handle_webhook",
     "verify_webhook_signature",
     "configure",
+    # Token usage tracking
+    "log_token_usage",
+
     # Session tracking (optional)
     "set_session",
     "get_session",

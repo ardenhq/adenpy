@@ -173,6 +173,44 @@ Uses `contextvars.ContextVar` — safe for concurrent async requests. Fully opti
 
 ---
 
+## Token usage tracking
+
+Arden automatically tracks token usage and estimated cost for every LLM call — no extra setup needed. For LangChain, CrewAI, and the OpenAI Agents SDK, `configure()` captures usage from the framework at runtime and sends it to the dashboard in a background thread (zero latency impact).
+
+```python
+import ardenpy as arden
+
+arden.configure(api_key="arden_live_...")
+# Token usage is now tracked automatically alongside tool calls.
+# View cost breakdowns by model, day, and session in the dashboard.
+```
+
+For custom agent loops where you call the LLM directly, log usage manually:
+
+```python
+response = openai_client.chat.completions.create(
+    model="gpt-4o",
+    messages=messages,
+)
+arden.log_token_usage(
+    model="gpt-4o",
+    prompt_tokens=response.usage.prompt_tokens,
+    completion_tokens=response.usage.completion_tokens,
+)
+```
+
+| What gets tracked | Automatically? |
+|---|---|
+| LangChain (`BaseChatModel`) | Yes — auto-patched by `configure()` |
+| CrewAI | Yes — uses LangChain under the hood |
+| OpenAI Agents SDK (`Runner.run`) | Yes — auto-patched by `configure()` |
+| OpenAI Chat Completions (raw loop) | Manual — call `arden.log_token_usage()` |
+| Any other LLM | Manual — call `arden.log_token_usage()` |
+
+The dashboard shows cost broken down by model, day, and session — all scoped per agent.
+
+---
+
 ## Error handling
 
 ```python

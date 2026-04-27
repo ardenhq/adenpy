@@ -45,6 +45,9 @@ def patch_all() -> list[str]:
         newly_patched.append("crewai")
     if _try_patch_openai_agents():
         newly_patched.append("openai-agents")
+    # Token usage capture — fire-and-forget, separate from tool enforcement
+    _try_patch_langchain_llm()
+    _try_patch_openai_agents_runner()
     return newly_patched
 
 
@@ -234,4 +237,109 @@ def _try_patch_openai_agents() -> bool:
     setattr(FunctionTool, _CLASS_PATCHED, True)
     _patched.add("openai-agents")
     logger.debug("Arden: auto-patched OpenAI Agents SDK FunctionTool.__init__")
+    return True
+
+
+# ── Token usage: LangChain / CrewAI ──────────────────────────────────────────
+
+def _try_patch_langchain_llm() -> bool:
+    """Patch BaseChatModel.invoke to capture token usage after each LLM call."""
+    if "langchain-llm" in _patched:
+        return False
+
+    try:
+        from langchain_core.language_models.chat_models import BaseChatModel
+    except ImportError:
+        try:
+            from langchain.chat_models.base import BaseChatModel  # type: ignore
+        except ImportError:
+            return False
+
+    if getattr(BaseChatModel, "_arden_llm_patched", False):
+        _patched.add("langchain-llm")
+        return False
+
+    _orig_invoke = BaseChatModel.invoke
+
+    @functools.wraps(_orig_invoke)
+    def _patched_invoke(self, input, config=None, **kwargs):
+        result = _orig_invoke(self, input, config=config, **kwargs)
+        try:
+            from .token_usage import log_token_usage, _extract_langchain_usage
+            # result is an AIMessage — wrap in a minimal LLMResult-like object
+            # to reuse the extraction logic.
+            usage_meta = getattr(result, "usage_metadata", None)
+            if usage_meta:
+                model = getattr(self, "model_name", None) or getattr(self, "model", "unknown")
+                log_token_usage(
+                    model=str(model),
+                    prompt_tokens=int(usage_meta.get("input_tokens", 0)),
+                    completion_tokens=int(usage_meta.get("output_tokens", 0)),
+                )
+            else:
+                # Older LangChain: response_metadata carries token counts
+                meta = getattr(result, "response_metadata", {}) or {}
+                usage = meta.get("token_usage") or meta.get("usage")
+                if usage:
+                    model = meta.get("model_name") or meta.get("model") or getattr(self, "model_name", "unknown")
+                    log_token_usage(
+                        model=str(model),
+                        prompt_tokens=int(usage.get("prompt_tokens", usage.get("input_tokens", 0))),
+                        completion_tokens=int(usage.get("completion_tokens", usage.get("output_tokens", 0))),
+                    )
+        except Exception as e:
+            logger.debug(f"Arden: LangChain token usage capture failed (non-fatal): {e}")
+        return result
+
+    BaseChatModel.invoke = _patched_invoke
+    setattr(BaseChatModel, "_arden_llm_patched", True)
+    _patched.add("langchain-llm")
+    logger.debug("Arden: auto-patched LangChain BaseChatModel.invoke for token usage")
+    return True
+
+
+# ── Token usage: OpenAI Agents SDK ───────────────────────────────────────────
+
+def _try_patch_openai_agents_runner() -> bool:
+    """Patch Runner.run to capture token usage from the RunResult."""
+    if "openai-agents-runner" in _patched:
+        return False
+
+    try:
+        from agents import Runner
+    except ImportError:
+        return False
+
+    if getattr(Runner, "_arden_runner_patched", False):
+        _patched.add("openai-agents-runner")
+        return False
+
+    _orig_run = Runner.run
+
+    @classmethod  # type: ignore[misc]
+    @functools.wraps(_orig_run.__func__ if hasattr(_orig_run, "__func__") else _orig_run)
+    async def _patched_run(cls, starting_agent, input, **kwargs):
+        result = await _orig_run.__func__(cls, starting_agent, input, **kwargs)
+        try:
+            usage = getattr(result, "usage", None)
+            if usage:
+                model = (
+                    getattr(starting_agent, "model", None)
+                    or getattr(starting_agent, "model_name", None)
+                    or "unknown"
+                )
+                from .token_usage import log_token_usage
+                log_token_usage(
+                    model=str(model),
+                    prompt_tokens=int(getattr(usage, "input_tokens",  0)),
+                    completion_tokens=int(getattr(usage, "output_tokens", 0)),
+                )
+        except Exception as e:
+            logger.debug(f"Arden: OpenAI Agents Runner token usage capture failed (non-fatal): {e}")
+        return result
+
+    Runner.run = _patched_run
+    setattr(Runner, "_arden_runner_patched", True)
+    _patched.add("openai-agents-runner")
+    logger.debug("Arden: auto-patched OpenAI Agents SDK Runner.run for token usage")
     return True
