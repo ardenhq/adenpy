@@ -323,12 +323,7 @@ def _try_patch_openai_agents_runner() -> bool:
         _patched.add("openai-agents-runner")
         return False
 
-    _orig_run = Runner.run
-
-    @classmethod  # type: ignore[misc]
-    @functools.wraps(_orig_run.__func__ if hasattr(_orig_run, "__func__") else _orig_run)
-    async def _patched_run(cls, starting_agent, input, **kwargs):
-        result = await _orig_run.__func__(cls, starting_agent, input, **kwargs)
+    def _log_runner_usage(starting_agent, result):
         try:
             usage = getattr(result, "usage", None)
             if usage:
@@ -340,15 +335,35 @@ def _try_patch_openai_agents_runner() -> bool:
                 from .token_usage import log_token_usage
                 log_token_usage(
                     model=str(model),
-                    prompt_tokens=int(getattr(usage, "input_tokens",  0)),
+                    prompt_tokens=int(getattr(usage, "input_tokens", 0)),
                     completion_tokens=int(getattr(usage, "output_tokens", 0)),
                 )
         except Exception as e:
             logger.debug(f"Arden: OpenAI Agents Runner token usage capture failed (non-fatal): {e}")
+
+    _orig_run = Runner.run
+
+    @classmethod  # type: ignore[misc]
+    @functools.wraps(_orig_run.__func__ if hasattr(_orig_run, "__func__") else _orig_run)
+    async def _patched_run(cls, starting_agent, input, **kwargs):
+        result = await _orig_run.__func__(cls, starting_agent, input, **kwargs)
+        _log_runner_usage(starting_agent, result)
         return result
 
     Runner.run = _patched_run
+
+    _orig_run_sync = getattr(Runner, "run_sync", None)
+    if _orig_run_sync is not None:
+        @classmethod  # type: ignore[misc]
+        @functools.wraps(_orig_run_sync.__func__ if hasattr(_orig_run_sync, "__func__") else _orig_run_sync)
+        def _patched_run_sync(cls, starting_agent, input, **kwargs):
+            result = _orig_run_sync.__func__(cls, starting_agent, input, **kwargs)
+            _log_runner_usage(starting_agent, result)
+            return result
+
+        Runner.run_sync = _patched_run_sync
+
     setattr(Runner, "_arden_runner_patched", True)
     _patched.add("openai-agents-runner")
-    logger.debug("Arden: auto-patched OpenAI Agents SDK Runner.run for token usage")
+    logger.debug("Arden: auto-patched OpenAI Agents SDK Runner.run and Runner.run_sync for token usage")
     return True
