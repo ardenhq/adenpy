@@ -259,15 +259,10 @@ def _try_patch_langchain_llm() -> bool:
         _patched.add("langchain-llm")
         return False
 
-    _orig_invoke = BaseChatModel.invoke
-
-    @functools.wraps(_orig_invoke)
-    def _patched_invoke(self, input, config=None, **kwargs):
-        result = _orig_invoke(self, input, config=config, **kwargs)
+    def _extract_and_log(self, result):
+        """Extract token usage from an AIMessage and fire log_token_usage."""
         try:
-            from .token_usage import log_token_usage, _extract_langchain_usage
-            # result is an AIMessage — wrap in a minimal LLMResult-like object
-            # to reuse the extraction logic.
+            from .token_usage import log_token_usage
             usage_meta = getattr(result, "usage_metadata", None)
             if usage_meta:
                 model = getattr(self, "model_name", None) or getattr(self, "model", "unknown")
@@ -277,7 +272,6 @@ def _try_patch_langchain_llm() -> bool:
                     completion_tokens=int(usage_meta.get("output_tokens", 0)),
                 )
             else:
-                # Older LangChain: response_metadata carries token counts
                 meta = getattr(result, "response_metadata", {}) or {}
                 usage = meta.get("token_usage") or meta.get("usage")
                 if usage:
@@ -289,12 +283,27 @@ def _try_patch_langchain_llm() -> bool:
                     )
         except Exception as e:
             logger.debug(f"Arden: LangChain token usage capture failed (non-fatal): {e}")
+
+    _orig_invoke = BaseChatModel.invoke
+    _orig_ainvoke = BaseChatModel.ainvoke
+
+    @functools.wraps(_orig_invoke)
+    def _patched_invoke(self, input, config=None, **kwargs):
+        result = _orig_invoke(self, input, config=config, **kwargs)
+        _extract_and_log(self, result)
+        return result
+
+    @functools.wraps(_orig_ainvoke)
+    async def _patched_ainvoke(self, input, config=None, **kwargs):
+        result = await _orig_ainvoke(self, input, config=config, **kwargs)
+        _extract_and_log(self, result)
         return result
 
     BaseChatModel.invoke = _patched_invoke
+    BaseChatModel.ainvoke = _patched_ainvoke
     setattr(BaseChatModel, "_arden_llm_patched", True)
     _patched.add("langchain-llm")
-    logger.debug("Arden: auto-patched LangChain BaseChatModel.invoke for token usage")
+    logger.debug("Arden: auto-patched LangChain BaseChatModel.invoke and ainvoke for token usage")
     return True
 
 
