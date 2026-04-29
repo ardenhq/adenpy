@@ -16,6 +16,7 @@ from .types import (
     ActionStatus,
     ConfigurationError,
     ArdenError,
+    ApprovalTimeoutError,
 )
 
 
