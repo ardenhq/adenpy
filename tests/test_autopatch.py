@@ -9,8 +9,12 @@ Covers:
 - OpenAI Agents SDK: tool created before configure() is NOT patched (known limitation)
 - OpenAI Agents SDK: tool created after configure() IS patched
 
+Tests call _apply_basetool_patch() directly on fake classes rather than
+going through _try_patch_langchain() + sys.modules injection, which is
+unreliable across Python versions when the real framework is not installed.
+
 Known limitation NOT tested (by design):
-- LangChain tool that overrides run() directly (shadows the monkey-patch at the subclass level)
+- LangChain tool that overrides run() directly (shadows the class-level patch)
   This is a rare pattern and would require per-class patching to fix.
 """
 
@@ -48,93 +52,42 @@ def _denied():
     return s
 
 
-# ── Fake framework modules ────────────────────────────────────────────────────
+# ── Fake BaseTool factories ───────────────────────────────────────────────────
 
-class _FakeLangChainModules:
-    """Context manager: injects a fresh LangChain BaseTool into sys.modules.
+def _make_langchain_basetool():
+    """Return a fresh, unpatched LangChain-style BaseTool class + execution log."""
+    executed = []
 
-    Creates a brand-new class each time (no _arden_class_patched sentinel),
-    captures which method the tool body was actually called through, and
-    restores sys.modules on exit.
-    """
+    class BaseTool:
+        name = "test_tool"
 
-    def __enter__(self):
-        self._executed = []
-        executed = self._executed
+        def run(self, tool_input, *args, **kwargs):
+            executed.append(("run", tool_input))
+            return f"run:{tool_input}"
 
-        class BaseTool:
-            name = "test_tool"
+        async def arun(self, tool_input, *args, **kwargs):
+            executed.append(("arun", tool_input))
+            return f"arun:{tool_input}"
 
-            def run(self, tool_input, *args, **kwargs):
-                executed.append(("run", tool_input))
-                return f"run:{tool_input}"
-
-            async def arun(self, tool_input, *args, **kwargs):
-                executed.append(("arun", tool_input))
-                return f"arun:{tool_input}"
-
-        self.BaseTool = BaseTool
-
-        pkg = types.ModuleType("langchain_core")
-        tools_pkg = types.ModuleType("langchain_core.tools")
-        base_mod = types.ModuleType("langchain_core.tools.base")
-        base_mod.BaseTool = BaseTool
-
-        self._saved = {k: sys.modules.get(k) for k in [
-            "langchain_core", "langchain_core.tools", "langchain_core.tools.base"
-        ]}
-        sys.modules["langchain_core"] = pkg
-        sys.modules["langchain_core.tools"] = tools_pkg
-        sys.modules["langchain_core.tools.base"] = base_mod
-        return self
-
-    def __exit__(self, *_):
-        for k, v in self._saved.items():
-            if v is None:
-                sys.modules.pop(k, None)
-            else:
-                sys.modules[k] = v
+    return BaseTool, executed
 
 
-class _FakeCrewAIModules:
-    """Same as above but for CrewAI's import path."""
+def _make_crewai_basetool():
+    """Return a fresh, unpatched CrewAI-style BaseTool class + execution log."""
+    executed = []
 
-    def __enter__(self):
-        self._executed = []
-        executed = self._executed
+    class BaseTool:
+        name = "test_tool"
 
-        class BaseTool:
-            name = "test_tool"
+        def run(self, tool_input=None, **kwargs):
+            executed.append(("run", tool_input))
+            return f"run:{tool_input}"
 
-            def run(self, tool_input=None, **kwargs):
-                executed.append(("run", tool_input))
-                return f"run:{tool_input}"
+        async def arun(self, tool_input=None, **kwargs):
+            executed.append(("arun", tool_input))
+            return f"arun:{tool_input}"
 
-            async def arun(self, tool_input=None, **kwargs):
-                executed.append(("arun", tool_input))
-                return f"arun:{tool_input}"
-
-        self.BaseTool = BaseTool
-
-        pkg = types.ModuleType("crewai")
-        tools_pkg = types.ModuleType("crewai.tools")
-        base_mod = types.ModuleType("crewai.tools.base_tool")
-        base_mod.BaseTool = BaseTool
-
-        self._saved = {k: sys.modules.get(k) for k in [
-            "crewai", "crewai.tools", "crewai.tools.base_tool"
-        ]}
-        sys.modules["crewai"] = pkg
-        sys.modules["crewai.tools"] = tools_pkg
-        sys.modules["crewai.tools.base_tool"] = base_mod
-        return self
-
-    def __exit__(self, *_):
-        for k, v in self._saved.items():
-            if v is None:
-                sys.modules.pop(k, None)
-            else:
-                sys.modules[k] = v
+    return BaseTool, executed
 
 
 def _fake_agents_modules():
@@ -155,12 +108,6 @@ def _fake_agents_modules():
 
 
 # ── Shared setUp/tearDown helpers ─────────────────────────────────────────────
-
-def _reset_autopatch(*framework_keys):
-    import ardenpy._autopatch as ap
-    for k in framework_keys:
-        ap._patched.discard(k)
-
 
 def _configure():
     import ardenpy.config
@@ -185,35 +132,22 @@ class TestPolicyCheckCore(unittest.TestCase):
     def tearDown(self):
         _unconfigure()
 
-    def _call(self, mock_response=None, mock_approval=None, side_effect=None):
+    def test_allow_executes_tool(self):
         from ardenpy.guard import _run_with_policy_check
         executed = []
-
-        check_kwargs = {}
-        if side_effect:
-            check_kwargs["side_effect"] = side_effect
-        else:
-            check_kwargs["return_value"] = mock_response
-
-        with patch("ardenpy.client.ArdenClient.check_tool_call", **check_kwargs):
+        with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_allow()):
             with patch("ardenpy.client.ArdenClient.close"):
-                wait_kwargs = {"return_value": mock_approval} if mock_approval else {}
-                with patch("ardenpy.client.ArdenClient.wait_for_approval", **wait_kwargs):
-                    result = _run_with_policy_check(
-                        tool_name="test.tool",
-                        context={"amount": 50},
-                        executor=lambda: executed.append(True) or "ok",
-                    )
-        return result, executed
-
-    def test_allow_executes_tool(self):
-        result, executed = self._call(mock_response=_allow())
+                result = _run_with_policy_check(
+                    tool_name="test.tool",
+                    context={"amount": 50},
+                    executor=lambda: executed.append(True) or "ok",
+                )
         self.assertEqual(result, "ok")
         self.assertTrue(executed)
 
     def test_block_raises_and_does_not_execute(self):
-        from ardenpy.types import PolicyDeniedError
         from ardenpy.guard import _run_with_policy_check
+        from ardenpy.types import PolicyDeniedError
         executed = []
         with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_block()):
             with patch("ardenpy.client.ArdenClient.close"):
@@ -222,13 +156,22 @@ class TestPolicyCheckCore(unittest.TestCase):
         self.assertFalse(executed, "Tool must not execute when blocked")
 
     def test_approval_approved_executes_tool(self):
-        result, executed = self._call(mock_response=_requires_approval(), mock_approval=_approved())
-        self.assertEqual(result, "ok")
+        from ardenpy.guard import _run_with_policy_check
+        executed = []
+        with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_requires_approval()):
+            with patch("ardenpy.client.ArdenClient.wait_for_approval", return_value=_approved()):
+                with patch("ardenpy.client.ArdenClient.close"):
+                    result = _run_with_policy_check(
+                        tool_name="test.tool",
+                        context={},
+                        executor=lambda: executed.append(True) or "approved_result",
+                    )
+        self.assertEqual(result, "approved_result")
         self.assertTrue(executed)
 
     def test_approval_denied_raises_and_does_not_execute(self):
-        from ardenpy.types import PolicyDeniedError
         from ardenpy.guard import _run_with_policy_check
+        from ardenpy.types import PolicyDeniedError
         executed = []
         with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_requires_approval()):
             with patch("ardenpy.client.ArdenClient.wait_for_approval", return_value=_denied()):
@@ -239,8 +182,8 @@ class TestPolicyCheckCore(unittest.TestCase):
 
     def test_arden_api_down_raises_does_not_execute(self):
         """Arden unreachable → ArdenError raised, tool never executes (fail-closed)."""
-        from ardenpy.types import ArdenError
         from ardenpy.guard import _run_with_policy_check
+        from ardenpy.types import ArdenError
         executed = []
         with patch("ardenpy.client.ArdenClient.check_tool_call", side_effect=ArdenError("connection refused")):
             with patch("ardenpy.client.ArdenClient.close"):
@@ -254,59 +197,60 @@ class TestPolicyCheckCore(unittest.TestCase):
 class TestLangChainRunPatch(unittest.TestCase):
 
     def setUp(self):
-        _reset_autopatch("langchain")
         _configure()
 
     def tearDown(self):
-        _reset_autopatch("langchain")
         _unconfigure()
 
+    def _patched_tool(self):
+        from ardenpy._autopatch import _apply_basetool_patch
+        BaseTool, executed = _make_langchain_basetool()
+        _apply_basetool_patch(BaseTool, crewai=False)
+        return BaseTool(), executed
+
     def test_run_allowed(self):
-        import ardenpy._autopatch as ap
-        with _FakeLangChainModules() as lc:
-            ap._try_patch_langchain()
-            tool = lc.BaseTool()
-            with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_allow()):
-                with patch("ardenpy.client.ArdenClient.close"):
-                    result = tool.run("hello")
-            self.assertEqual(result, "run:hello")
-            self.assertIn(("run", "hello"), lc._executed)
+        tool, executed = self._patched_tool()
+        with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_allow()):
+            with patch("ardenpy.client.ArdenClient.close"):
+                result = tool.run("hello")
+        self.assertEqual(result, "run:hello")
+        self.assertIn(("run", "hello"), executed)
 
     def test_run_blocked_tool_does_not_execute(self):
         from ardenpy.types import PolicyDeniedError
-        import ardenpy._autopatch as ap
-        with _FakeLangChainModules() as lc:
-            ap._try_patch_langchain()
-            tool = lc.BaseTool()
-            with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_block()):
-                with patch("ardenpy.client.ArdenClient.close"):
-                    with self.assertRaises(PolicyDeniedError):
-                        tool.run("hello")
-            self.assertFalse(lc._executed, "Tool body must not run when blocked")
+        tool, executed = self._patched_tool()
+        with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_block()):
+            with patch("ardenpy.client.ArdenClient.close"):
+                with self.assertRaises(PolicyDeniedError):
+                    tool.run("hello")
+        self.assertFalse(executed, "Tool body must not run when blocked")
 
     def test_run_guarded_skips_policy_check(self):
-        import ardenpy._autopatch as ap
-        with _FakeLangChainModules() as lc:
-            ap._try_patch_langchain()
-            tool = lc.BaseTool()
-            setattr(tool, "_arden_guarded", True)
-            check = MagicMock()
-            with patch("ardenpy.client.ArdenClient.check_tool_call", check):
-                result = tool.run("hello")
-            self.assertEqual(result, "run:hello")
-            check.assert_not_called()
+        tool, executed = self._patched_tool()
+        setattr(tool, "_arden_guarded", True)
+        check = MagicMock()
+        with patch("ardenpy.client.ArdenClient.check_tool_call", check):
+            result = tool.run("hello")
+        self.assertEqual(result, "run:hello")
+        check.assert_not_called()
 
     def test_run_fail_closed_when_arden_down(self):
         from ardenpy.types import ArdenError
-        import ardenpy._autopatch as ap
-        with _FakeLangChainModules() as lc:
-            ap._try_patch_langchain()
-            tool = lc.BaseTool()
-            with patch("ardenpy.client.ArdenClient.check_tool_call", side_effect=ArdenError("down")):
-                with patch("ardenpy.client.ArdenClient.close"):
-                    with self.assertRaises(ArdenError):
-                        tool.run("hello")
-            self.assertFalse(lc._executed, "Tool must not execute when Arden is down")
+        tool, executed = self._patched_tool()
+        with patch("ardenpy.client.ArdenClient.check_tool_call", side_effect=ArdenError("down")):
+            with patch("ardenpy.client.ArdenClient.close"):
+                with self.assertRaises(ArdenError):
+                    tool.run("hello")
+        self.assertFalse(executed, "Tool must not execute when Arden is down")
+
+    def test_patch_is_actually_applied(self):
+        """Verify check_tool_call IS called for allow (not just the original run)."""
+        tool, _ = self._patched_tool()
+        check = MagicMock(return_value=_allow())
+        with patch("ardenpy.client.ArdenClient.check_tool_call", check):
+            with patch("ardenpy.client.ArdenClient.close"):
+                tool.run("hello")
+        check.assert_called_once()
 
 
 # ── LangChain async (arun) ────────────────────────────────────────────────────
@@ -315,83 +259,79 @@ class TestLangChainArunPatch(unittest.TestCase):
     """Regression: arun was previously unpatched and bypassed policy checks."""
 
     def setUp(self):
-        _reset_autopatch("langchain")
         _configure()
 
     def tearDown(self):
-        _reset_autopatch("langchain")
         _unconfigure()
 
+    def _patched_tool(self):
+        from ardenpy._autopatch import _apply_basetool_patch
+        BaseTool, executed = _make_langchain_basetool()
+        _apply_basetool_patch(BaseTool, crewai=False)
+        return BaseTool(), executed
+
     def test_arun_allowed(self):
-        import ardenpy._autopatch as ap
-        with _FakeLangChainModules() as lc:
-            ap._try_patch_langchain()
-            tool = lc.BaseTool()
-            with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_allow()):
-                with patch("ardenpy.client.ArdenClient.close"):
-                    result = asyncio.run(tool.arun("hello"))
-            self.assertEqual(result, "arun:hello")
-            self.assertIn(("arun", "hello"), lc._executed)
+        tool, executed = self._patched_tool()
+        with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_allow()):
+            with patch("ardenpy.client.ArdenClient.close"):
+                result = asyncio.run(tool.arun("hello"))
+        self.assertEqual(result, "arun:hello")
+        self.assertIn(("arun", "hello"), executed)
 
     def test_arun_blocked_tool_does_not_execute(self):
         from ardenpy.types import PolicyDeniedError
-        import ardenpy._autopatch as ap
-        with _FakeLangChainModules() as lc:
-            ap._try_patch_langchain()
-            tool = lc.BaseTool()
-            with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_block()):
-                with patch("ardenpy.client.ArdenClient.close"):
-                    with self.assertRaises(PolicyDeniedError):
-                        asyncio.run(tool.arun("hello"))
-            self.assertFalse(lc._executed, "Tool body must not run when blocked")
+        tool, executed = self._patched_tool()
+        with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_block()):
+            with patch("ardenpy.client.ArdenClient.close"):
+                with self.assertRaises(PolicyDeniedError):
+                    asyncio.run(tool.arun("hello"))
+        self.assertFalse(executed, "Tool body must not run when blocked")
 
     def test_arun_approval_approved_executes(self):
-        import ardenpy._autopatch as ap
-        with _FakeLangChainModules() as lc:
-            ap._try_patch_langchain()
-            tool = lc.BaseTool()
-            with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_requires_approval()):
-                with patch("ardenpy.client.ArdenClient.wait_for_approval", return_value=_approved()):
-                    with patch("ardenpy.client.ArdenClient.close"):
-                        result = asyncio.run(tool.arun("hello"))
-            self.assertEqual(result, "arun:hello")
+        tool, executed = self._patched_tool()
+        with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_requires_approval()):
+            with patch("ardenpy.client.ArdenClient.wait_for_approval", return_value=_approved()):
+                with patch("ardenpy.client.ArdenClient.close"):
+                    result = asyncio.run(tool.arun("hello"))
+        self.assertEqual(result, "arun:hello")
+        self.assertTrue(executed)
 
     def test_arun_approval_denied_raises(self):
         from ardenpy.types import PolicyDeniedError
-        import ardenpy._autopatch as ap
-        with _FakeLangChainModules() as lc:
-            ap._try_patch_langchain()
-            tool = lc.BaseTool()
-            with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_requires_approval()):
-                with patch("ardenpy.client.ArdenClient.wait_for_approval", return_value=_denied()):
-                    with patch("ardenpy.client.ArdenClient.close"):
-                        with self.assertRaises(PolicyDeniedError):
-                            asyncio.run(tool.arun("hello"))
-            self.assertFalse(lc._executed)
+        tool, executed = self._patched_tool()
+        with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_requires_approval()):
+            with patch("ardenpy.client.ArdenClient.wait_for_approval", return_value=_denied()):
+                with patch("ardenpy.client.ArdenClient.close"):
+                    with self.assertRaises(PolicyDeniedError):
+                        asyncio.run(tool.arun("hello"))
+        self.assertFalse(executed)
 
     def test_arun_guarded_skips_policy_check(self):
-        import ardenpy._autopatch as ap
-        with _FakeLangChainModules() as lc:
-            ap._try_patch_langchain()
-            tool = lc.BaseTool()
-            setattr(tool, "_arden_guarded", True)
-            check = MagicMock()
-            with patch("ardenpy.client.ArdenClient.check_tool_call", check):
-                result = asyncio.run(tool.arun("hello"))
-            self.assertEqual(result, "arun:hello")
-            check.assert_not_called()
+        tool, executed = self._patched_tool()
+        setattr(tool, "_arden_guarded", True)
+        check = MagicMock()
+        with patch("ardenpy.client.ArdenClient.check_tool_call", check):
+            result = asyncio.run(tool.arun("hello"))
+        self.assertEqual(result, "arun:hello")
+        check.assert_not_called()
 
     def test_arun_fail_closed_when_arden_down(self):
         from ardenpy.types import ArdenError
-        import ardenpy._autopatch as ap
-        with _FakeLangChainModules() as lc:
-            ap._try_patch_langchain()
-            tool = lc.BaseTool()
-            with patch("ardenpy.client.ArdenClient.check_tool_call", side_effect=ArdenError("down")):
-                with patch("ardenpy.client.ArdenClient.close"):
-                    with self.assertRaises(ArdenError):
-                        asyncio.run(tool.arun("hello"))
-            self.assertFalse(lc._executed, "Tool must not execute when Arden is down")
+        tool, executed = self._patched_tool()
+        with patch("ardenpy.client.ArdenClient.check_tool_call", side_effect=ArdenError("down")):
+            with patch("ardenpy.client.ArdenClient.close"):
+                with self.assertRaises(ArdenError):
+                    asyncio.run(tool.arun("hello"))
+        self.assertFalse(executed, "Tool must not execute when Arden is down")
+
+    def test_patch_is_actually_applied(self):
+        """Verify check_tool_call IS called for arun (not just the original arun)."""
+        tool, _ = self._patched_tool()
+        check = MagicMock(return_value=_allow())
+        with patch("ardenpy.client.ArdenClient.check_tool_call", check):
+            with patch("ardenpy.client.ArdenClient.close"):
+                asyncio.run(tool.arun("hello"))
+        check.assert_called_once()
 
 
 # ── CrewAI (run + arun) ───────────────────────────────────────────────────────
@@ -399,56 +339,50 @@ class TestLangChainArunPatch(unittest.TestCase):
 class TestCrewAIPatch(unittest.TestCase):
 
     def setUp(self):
-        _reset_autopatch("crewai")
         _configure()
 
     def tearDown(self):
-        _reset_autopatch("crewai")
         _unconfigure()
 
+    def _patched_tool(self):
+        from ardenpy._autopatch import _apply_basetool_patch
+        BaseTool, executed = _make_crewai_basetool()
+        _apply_basetool_patch(BaseTool, crewai=True)
+        return BaseTool(), executed
+
     def test_run_allowed(self):
-        import ardenpy._autopatch as ap
-        with _FakeCrewAIModules() as crew:
-            ap._try_patch_crewai()
-            tool = crew.BaseTool()
-            with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_allow()):
-                with patch("ardenpy.client.ArdenClient.close"):
-                    result = tool.run("hello")
-            self.assertEqual(result, "run:hello")
+        tool, executed = self._patched_tool()
+        with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_allow()):
+            with patch("ardenpy.client.ArdenClient.close"):
+                result = tool.run("hello")
+        self.assertEqual(result, "run:hello")
+        self.assertIn(("run", "hello"), executed)
 
     def test_run_blocked(self):
         from ardenpy.types import PolicyDeniedError
-        import ardenpy._autopatch as ap
-        with _FakeCrewAIModules() as crew:
-            ap._try_patch_crewai()
-            tool = crew.BaseTool()
-            with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_block()):
-                with patch("ardenpy.client.ArdenClient.close"):
-                    with self.assertRaises(PolicyDeniedError):
-                        tool.run("hello")
-            self.assertFalse(crew._executed)
+        tool, executed = self._patched_tool()
+        with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_block()):
+            with patch("ardenpy.client.ArdenClient.close"):
+                with self.assertRaises(PolicyDeniedError):
+                    tool.run("hello")
+        self.assertFalse(executed)
 
     def test_arun_allowed(self):
-        import ardenpy._autopatch as ap
-        with _FakeCrewAIModules() as crew:
-            ap._try_patch_crewai()
-            tool = crew.BaseTool()
-            with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_allow()):
-                with patch("ardenpy.client.ArdenClient.close"):
-                    result = asyncio.run(tool.arun("hello"))
-            self.assertEqual(result, "arun:hello")
+        tool, executed = self._patched_tool()
+        with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_allow()):
+            with patch("ardenpy.client.ArdenClient.close"):
+                result = asyncio.run(tool.arun("hello"))
+        self.assertEqual(result, "arun:hello")
+        self.assertIn(("arun", "hello"), executed)
 
     def test_arun_blocked(self):
         from ardenpy.types import PolicyDeniedError
-        import ardenpy._autopatch as ap
-        with _FakeCrewAIModules() as crew:
-            ap._try_patch_crewai()
-            tool = crew.BaseTool()
-            with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_block()):
-                with patch("ardenpy.client.ArdenClient.close"):
-                    with self.assertRaises(PolicyDeniedError):
-                        asyncio.run(tool.arun("hello"))
-            self.assertFalse(crew._executed)
+        tool, executed = self._patched_tool()
+        with patch("ardenpy.client.ArdenClient.check_tool_call", return_value=_block()):
+            with patch("ardenpy.client.ArdenClient.close"):
+                with self.assertRaises(PolicyDeniedError):
+                    asyncio.run(tool.arun("hello"))
+        self.assertFalse(executed)
 
 
 # ── OpenAI Agents SDK: configure() order ─────────────────────────────────────
@@ -457,11 +391,13 @@ class TestOpenAIAgentsConfigureOrder(unittest.TestCase):
     """Tools created before configure() are NOT patched — known limitation."""
 
     def setUp(self):
-        _reset_autopatch("openai-agents")
+        import ardenpy._autopatch as ap
+        ap._patched.discard("openai-agents")
         _unconfigure()
 
     def tearDown(self):
-        _reset_autopatch("openai-agents")
+        import ardenpy._autopatch as ap
+        ap._patched.discard("openai-agents")
         _unconfigure()
         for k in ["agents", "agents.tool"]:
             sys.modules.pop(k, None)
