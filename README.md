@@ -2,6 +2,12 @@
 
 **Policy enforcement and human approval for AI agent tool calls.**
 
+[![Tests](https://github.com/ardenhq/ardenpy/actions/workflows/test.yml/badge.svg)](https://github.com/ardenhq/ardenpy/actions/workflows/test.yml)
+[![PyPI version](https://badge.fury.io/py/ardenpy.svg)](https://pypi.org/project/ardenpy/)
+[![Python versions](https://img.shields.io/pypi/pyversions/ardenpy.svg)](https://pypi.org/project/ardenpy/)
+[![Coverage](https://codecov.io/gh/ardenhq/ardenpy/branch/main/graph/badge.svg)](https://codecov.io/gh/ardenhq/ardenpy)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 ![Arden demo](assets/ArdenGithubDemo.gif)
 
 Arden sits between your agent and its tools. Every call is checked against policies you configure in the dashboard — automatically allowed, blocked, or held for a human to approve.

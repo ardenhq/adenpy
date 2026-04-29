@@ -44,8 +44,8 @@ all = ["langchain>=0.1.0", "crewai>=0.28.0", "openai-agents>=0.0.3"]
 [project.urls]
 Homepage = "https://arden.sh"
 Documentation = "https://arden.sh/docs"
-Repository = "https://github.com/ardenhq/adenpy"
-Issues = "https://github.com/ardenhq/adenpy/issues"
+Repository = "https://github.com/ardenhq/ardenpy"
+Issues = "https://github.com/ardenhq/ardenpy/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
