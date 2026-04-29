@@ -79,13 +79,12 @@ def _try_patch_langchain() -> bool:
         return False
 
     _orig_run = BaseTool.run
+    _orig_arun = getattr(BaseTool, "arun", None)
 
     @functools.wraps(_orig_run)
     def _patched_run(self, tool_input, *args, **kwargs):
-        # Skip if this instance was explicitly wrapped with protect_tools()
         if getattr(self, ARDEN_GUARDED, False):
             return _orig_run(self, tool_input, *args, **kwargs)
-
         from .guard import _run_with_policy_check, _make_serializable
         return _run_with_policy_check(
             tool_name=self.name,
@@ -94,9 +93,60 @@ def _try_patch_langchain() -> bool:
         )
 
     BaseTool.run = _patched_run
+
+    if _orig_arun is not None:
+        @functools.wraps(_orig_arun)
+        async def _patched_arun(self, tool_input, *args, **kwargs):
+            if getattr(self, ARDEN_GUARDED, False):
+                return await _orig_arun(self, tool_input, *args, **kwargs)
+            import asyncio
+            from .guard import _make_serializable
+            from .session import get_session
+            from .client import ArdenClient
+            from .types import PolicyDecision, PolicyDeniedError, ArdenError
+            context = _make_serializable(_make_context(tool_input))
+            session_id = get_session()
+            metadata = {"session_id": session_id} if session_id else None
+            tool_name = self.name
+            client = ArdenClient()
+            try:
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: client.check_tool_call(
+                        tool_name=tool_name, args=[], kwargs=context, metadata=metadata,
+                    ),
+                )
+                if response.decision == PolicyDecision.ALLOW:
+                    return await _orig_arun(self, tool_input, *args, **kwargs)
+                elif response.decision == PolicyDecision.BLOCK:
+                    raise PolicyDeniedError(
+                        response.message or f"Tool '{tool_name}' is blocked by policy",
+                        tool_name=tool_name,
+                    )
+                elif response.decision == PolicyDecision.REQUIRE_APPROVAL:
+                    if not response.action_id:
+                        raise ArdenError("Policy requires approval but no action_id provided")
+                    status = await loop.run_in_executor(
+                        None, lambda: client.wait_for_approval(response.action_id)
+                    )
+                    if status.status.value == "approved":
+                        return await _orig_arun(self, tool_input, *args, **kwargs)
+                    else:
+                        raise PolicyDeniedError(
+                            f"Tool call was denied: {status.message or 'No reason provided'}",
+                            tool_name=tool_name,
+                        )
+                else:
+                    raise ArdenError(f"Unknown policy decision: {response.decision}")
+            finally:
+                client.close()
+
+        BaseTool.arun = _patched_arun
+
     setattr(BaseTool, _CLASS_PATCHED, True)
     _patched.add("langchain")
-    logger.debug("Arden: auto-patched LangChain BaseTool.run")
+    logger.debug("Arden: auto-patched LangChain BaseTool.run and arun")
     return True
 
 
@@ -119,32 +169,81 @@ def _try_patch_crewai() -> bool:
         return False
 
     _orig_run = BaseTool.run
+    _orig_arun = getattr(BaseTool, "arun", None)
 
     @functools.wraps(_orig_run)
     def _patched_run(self, tool_input=None, **kwargs):
-        # Skip if this instance was explicitly wrapped with protect_tools()
         if getattr(self, ARDEN_GUARDED, False):
             return _orig_run(self, tool_input, **kwargs) if tool_input is not None else _orig_run(self, **kwargs)
-
         from .guard import _run_with_policy_check, _make_serializable
-
         if tool_input is not None:
             context = _make_serializable(_make_context(tool_input))
             executor = lambda: _orig_run(self, tool_input, **kwargs)
         else:
             context = _make_serializable(kwargs)
             executor = lambda: _orig_run(self, **kwargs)
-
-        return _run_with_policy_check(
-            tool_name=self.name,
-            context=context,
-            executor=executor,
-        )
+        return _run_with_policy_check(tool_name=self.name, context=context, executor=executor)
 
     BaseTool.run = _patched_run
+
+    if _orig_arun is not None:
+        @functools.wraps(_orig_arun)
+        async def _patched_arun(self, tool_input=None, **kwargs):
+            if getattr(self, ARDEN_GUARDED, False):
+                return await (_orig_arun(self, tool_input, **kwargs) if tool_input is not None else _orig_arun(self, **kwargs))
+            import asyncio
+            from .guard import _make_serializable
+            from .session import get_session
+            from .client import ArdenClient
+            from .types import PolicyDecision, PolicyDeniedError, ArdenError
+            if tool_input is not None:
+                context = _make_serializable(_make_context(tool_input))
+                async_executor = lambda: _orig_arun(self, tool_input, **kwargs)
+            else:
+                context = _make_serializable(kwargs)
+                async_executor = lambda: _orig_arun(self, **kwargs)
+            tool_name = self.name
+            session_id = get_session()
+            metadata = {"session_id": session_id} if session_id else None
+            client = ArdenClient()
+            try:
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: client.check_tool_call(
+                        tool_name=tool_name, args=[], kwargs=context, metadata=metadata,
+                    ),
+                )
+                if response.decision == PolicyDecision.ALLOW:
+                    return await async_executor()
+                elif response.decision == PolicyDecision.BLOCK:
+                    raise PolicyDeniedError(
+                        response.message or f"Tool '{tool_name}' is blocked by policy",
+                        tool_name=tool_name,
+                    )
+                elif response.decision == PolicyDecision.REQUIRE_APPROVAL:
+                    if not response.action_id:
+                        raise ArdenError("Policy requires approval but no action_id provided")
+                    status = await loop.run_in_executor(
+                        None, lambda: client.wait_for_approval(response.action_id)
+                    )
+                    if status.status.value == "approved":
+                        return await async_executor()
+                    else:
+                        raise PolicyDeniedError(
+                            f"Tool call was denied: {status.message or 'No reason provided'}",
+                            tool_name=tool_name,
+                        )
+                else:
+                    raise ArdenError(f"Unknown policy decision: {response.decision}")
+            finally:
+                client.close()
+
+        BaseTool.arun = _patched_arun
+
     setattr(BaseTool, _CLASS_PATCHED, True)
     _patched.add("crewai")
-    logger.debug("Arden: auto-patched CrewAI BaseTool.run")
+    logger.debug("Arden: auto-patched CrewAI BaseTool.run and arun")
     return True
 
 
